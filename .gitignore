@@ -1,0 +1,28 @@
+# Build
+bin/
+tmp/
+dist/
+*.exe
+*.test
+*.out
+build-errors.log
+
+# Coverage
+coverage.*
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Claude Code: commit CLAUDE.md, .claude/settings.json, .claude/skills, .claude/hookify.*.local.md;
+# per-machine overrides stay local
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Editors
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/

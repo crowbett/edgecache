@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "PowerShell(task *)",
+      "Bash(task *)",
+      "PowerShell(go build *)",
+      "Bash(go build *)",
+      "PowerShell(go test *)",
+      "Bash(go test *)",
+      "PowerShell(go vet *)",
+      "Bash(go vet *)",
+      "PowerShell(go list *)",
+      "Bash(go list *)",
+      "PowerShell(go mod tidy)",
+      "Bash(go mod tidy)",
+      "PowerShell(go mod verify)",
+      "Bash(go mod verify)",
+      "PowerShell(golangci-lint run *)",
+      "Bash(golangci-lint run *)",
+      "PowerShell(golangci-lint fmt *)",
+      "Bash(golangci-lint fmt *)",
+      "PowerShell(govulncheck *)",
+      "Bash(govulncheck *)",
+      "PowerShell(sqlc generate *)",
+      "Bash(sqlc generate *)",
+      "PowerShell(sqlc vet *)",
+      "Bash(sqlc vet *)",
+      "PowerShell(goose -dir db/migrations create *)",
+      "Bash(goose -dir db/migrations create *)",
+      "PowerShell(docker compose ps *)",
+      "Bash(docker compose ps *)",
+      "PowerShell(docker compose logs *)",
+      "Bash(docker compose logs *)",
+      "PowerShell(docker compose config *)",
+      "Bash(docker compose config *)"
+    ]
+  }
+}

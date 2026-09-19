@@ -1,0 +1,117 @@
+# https://taskfile.dev  --  install: go install github.com/go-task/task/v3/cmd/task@latest
+version: "3"
+
+vars:
+  APP: api
+  MAIN: ./cmd/edgecache
+  BIN: bin/{{.APP}}{{exeExt}}
+  IMAGE: '{{.APP}}:local'
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  LDFLAGS: -s -w -X main.version={{.VERSION}}
+
+env:
+  CGO_ENABLED: "0"
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  tidy:
+    desc: go mod tidy + verify
+    cmds:
+      - go mod tidy
+      - go mod verify
+
+  build:
+    desc: Build the binary into bin/
+    cmds:
+      - go build -trimpath -ldflags="{{.LDFLAGS}}" -o {{.BIN}} {{.MAIN}}
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BIN}}"
+
+  run:
+    desc: Run the API locally
+    cmds:
+      - go run {{.MAIN}}
+
+  dev:
+    desc: Hot reload with air (go install github.com/air-verse/air@latest)
+    cmds:
+      - air
+
+  test:
+    desc: Run tests with the race detector (needs a C compiler on Windows)
+    cmds:
+      - go test -race -count=1 ./...
+    env:
+      CGO_ENABLED: "1"
+
+  test:fast:
+    desc: Run tests without -race
+    cmds:
+      - go test -count=1 ./...
+
+  cover:
+    desc: Coverage report (opens HTML)
+    cmds:
+      - go test -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+      - go tool cover -func=coverage.out
+      - go tool cover -html=coverage.out -o coverage.html
+
+  vet:
+    desc: go vet
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: golangci-lint (https://golangci-lint.run/welcome/install/)
+    cmds:
+      - golangci-lint run ./...
+
+  fmt:
+    desc: Format with gofumpt + goimports
+    cmds:
+      - golangci-lint fmt ./...
+
+  vuln:
+    desc: govulncheck
+    cmds:
+      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  check:
+    desc: tidy + vet + lint + test
+    deps: [tidy]
+    cmds:
+      - task: vet
+      - task: lint
+      - task: test:fast
+
+  docker:build:
+    desc: Build the container image
+    cmds:
+      - docker build -t {{.IMAGE}} --build-arg VERSION={{.VERSION}} .
+
+  docker:run:
+    desc: Run the container on :8080
+    cmds:
+      - docker run --rm -p 8080:8080 -e LOG_FORMAT=text {{.IMAGE}}
+
+  up:
+    desc: docker compose up (api + postgres + redis)
+    cmds:
+      - docker compose up -d --build --wait
+
+  down:
+    desc: docker compose down (keeps volumes)
+    cmds:
+      - docker compose down
+
+  clean:
+    cmds:
+      - '{{if eq OS "windows"}}powershell -NoProfile -Command "Remove-Item -Recurse -Force bin, tmp, coverage.out, coverage.html -ErrorAction SilentlyContinue"{{else}}rm -rf bin tmp coverage.out coverage.html{{end}}'
