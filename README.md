@@ -74,10 +74,11 @@ lands an entry. Proof from the smoke run: 20 concurrent cold `GET /obj/777` -> o
 
 ## Purge API
 
-- `PURGE <path>` on the proxy listener with `X-Purge-Token` (constant-time compare; missing -> 401,
-  wrong -> 403). Deletes every variant of the URL.
+- `PURGE <path>` on the proxy listener with `X-Purge-Token` (constant-time, length-independent compare;
+  missing -> 401, wrong -> 403). Deletes every variant of the URL.
 - `POST /admin/purge {"url"|"prefix"|"tag"}` on the admin listener; exactly one selector. Prefix and
-  tag go through the in-memory tag index (`Cache-Tag` / `Surrogate-Key`, rebuilt from disk metas at boot).
+  tag go through the in-memory tag index (`Cache-Tag` / `Surrogate-Key`, rebuilt from disk metas at boot,
+  reconciled with the store's own evictions on every janitor tick so it never outgrows the store).
 - With a token configured both listeners require it; without one only loopback peers may purge.
 - Response `{"purged":N,"kind":"url|prefix|tag"}` (+ `keys` with `EDGECACHE_PURGE_VERBOSE`), counted in
   `edgecache_purges_total{kind}`.
@@ -89,7 +90,7 @@ Every key is validated at startup and all problems are reported at once (`errors
 | Env | Default | Meaning |
 |---|---|---|
 | `EDGECACHE_ADDR` / `EDGECACHE_ADMIN_ADDR` | `127.0.0.1:8081` / `127.0.0.1:9101` | proxy listener / admin + metrics + pprof (token required off loopback) |
-| `EDGECACHE_ORIGIN` / `EDGECACHE_ORIGIN_HOST` | *(required)* / `""` | upstream base URL (http/https); `Host` override |
+| `EDGECACHE_ORIGIN` / `EDGECACHE_ORIGIN_HOST` | *(required)* / `""` | upstream base URL (http/https; a client path is dot-segment-resolved before it is appended, so `/../` never leaves the base path; userinfo is redacted in logs); `Host` override |
 | `EDGECACHE_ORIGIN_HEADER_TIMEOUT` / `_TIMEOUT` / `_MAX_CONNS` | `10s` / `60s` / `128` | header wait, whole fetch, pool per host |
 | `EDGECACHE_MEM_BYTES` / `EDGECACHE_MEM_SHARDS` | `512MiB` / `16` | memory budget, shard count (power of two in [1,256]) |
 | `EDGECACHE_DISK_DIR` / `EDGECACHE_DISK_BYTES` | `""` (disabled) / `5GiB` | disk tier root (probed at startup) and budget |
@@ -101,7 +102,7 @@ Every key is validated at startup and all problems are reported at once (`errors
 | `EDGECACHE_ORPHAN_FETCH` / `EDGECACHE_ORPHAN_MAX_BYTES` | `true` / `8MiB` | finish a fetch after the client disconnects |
 | `EDGECACHE_PURGE_TOKEN` / `EDGECACHE_PURGE_VERBOSE` | `""` / `false` | purge credential; list purged keys |
 | `EDGECACHE_TAG_HEADERS` | `Cache-Tag,Surrogate-Key` | response headers read as surrogate keys |
-| `EDGECACHE_JANITOR_INTERVAL` / `EDGECACHE_COLLAPSE_LEAD_TIMEOUT` | `30s` / `60s` | tombstone sweep + gauge tick / leader budget |
+| `EDGECACHE_JANITOR_INTERVAL` / `EDGECACHE_COLLAPSE_LEAD_TIMEOUT` | `30s` / `60s` | tombstone sweep + tag-index reconcile + gauge tick / leader budget |
 | `REQUEST_TIMEOUT` / `SHUTDOWN_TIMEOUT` | `60s` / `15s` | admin mux only / proxy drain budget (teardown stage 2) |
 | `SERVICE_NAME` `APP_ENV` `LOG_LEVEL` `LOG_FORMAT` | `edgecache` `dev` `info` `json` | `LOG_LEVEL=debug` adds `X-Cache-Key` |
 | `OTEL_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` | `false` / `http://localhost:4317` | OTLP/gRPC traces + metrics, off by default |
@@ -229,8 +230,6 @@ still get the value; `internal/diskstore` tests orphan sweep, corrupt meta and e
 
 ## Follow-ups
 
-- Reconcile the tag index with LRU eviction (an evicted entry currently leaves its tag-index row until
-  the next purge touches it).
 - Path-prefix purge that matches on the canonical path rather than the absolute URL prefix.
 - Stream-sharing for collapse waiters (Varnish-style) if the cold p99 says the wait for commit dominates.
 - Store 206 responses and stitch ranges; today `Range` requests pass through uncached.

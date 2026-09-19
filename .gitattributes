@@ -1,0 +1,3 @@
+# Golden files and the PGO profile are compared byte for byte: never CRLF-convert them on checkout.
+*.golden -text
+*.pgo binary
