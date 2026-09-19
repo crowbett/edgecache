@@ -41,9 +41,16 @@ table, data flow, teardown stages, fanout and frozen types) is `docs/PLAN.md`; r
    No cycles, no `util`/`common`/`models`.
 
 ## Commands (Taskfile.yml)
-- `task run` (needs `EDGECACHE_ORIGIN`), `task origin` (slow-origin on :8082), `task build`, `task dev` (air)
-- `task test` (`go test -race -count=1 ./...`) / `task test:fast`, `task vet`, `task lint`, `task fmt`, `task check`
-- `task bench` (`go test -run '^$' -bench . -benchmem ./internal/...`), `task load` (`scripts/cache.ps1`, oha)
+- `task origin` (slow-origin on 127.0.0.1:8082), `task run` (edgecache on :8081, admin :9101; `EDGECACHE_ORIGIN`
+  defaults to `http://127.0.0.1:8082`, shell env wins), `task build` (both binaries into `bin/`, version from git).
+- `task test` (`go test -race -count=1 ./...`) / `task test:fast`, `task vet`, `task lint`, `task fmt`, `task check`.
+- `task load` (`scripts/cache.ps1`: cold/warm/no-cache/origin -> `results/<ts>/summary.md`), `task pgo`
+  (`scripts/pgo.ps1`: profile + A/B/A/B -> `results/pgo/<ts>/summary.md`), `task bench` (`scripts/bench.ps1 -Save
+  baseline` -> `.bench/baseline.txt`), `task bench:compare` (benchstat against the baseline).
+- The scripts need `pwsh`, `oha` on PATH and free ports 8081/8082/9101; they build their own `bin/*.exe`.
+- Ctrl-Break testing on Windows: every process launched from one shell shares a console, and
+  `GenerateConsoleCtrlEvent` hits the whole group. Start edgecache in its own console (`Start-Process`) before
+  signalling it, or the load generator and slow-origin die with it.
 
 ## Conventions specific to this repo
 - **Frozen types** (changed only by the integrator, together with `docs/PLAN.md`): `store.Meta`, `store.Writer`,
@@ -67,6 +74,13 @@ table, data flow, teardown stages, fanout and frozen types) is `docs/PLAN.md`; r
 
 ## Definition of done
 `go build ./...`, `go vet ./...`, `go test -race -count=1 ./...`, `golangci-lint run ./...` all green (say which
-you ran), plus - for step 12 and any perf change - `scripts/cache.ps1` numbers (mode, rps, p50/p90/p99, hit-ratio
-from `/metrics` deltas, origin-rps) recorded in `README.md` and `results/<ts>/summary.md`, and `.bench/baseline.txt`
-compared with benchstat.
+you ran), plus - for any perf change - a fresh `scripts/cache.ps1` table (mode, rps, p50/p90/p99, hit-ratio from
+`/metrics` deltas, origin-rps) in `results/<ts>/summary.md` and `scripts/bench.ps1 -Compare baseline`.
+
+## Measured numbers only
+Every number in `README.md` (rps, p99, hit ratio, PGO delta, ns/op, allocs) is pasted from a real run on this box
+and names the machine, the run settings and the `results/<ts>/summary.md` or `.bench/*.txt` it came from. Never
+estimate, round up, or carry a number forward after the code on the hot path changed: re-run the script, replace
+the table, commit the summary alongside. A PGO profile is committed only when `pgo.ps1` shows no regression in any
+round (a gain inside the round-to-round noise is kept but labelled as such in the README); a regression means the
+profile is rejected, not tuned.
