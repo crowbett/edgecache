@@ -25,8 +25,11 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /out/api /api
 
-ENV HTTP_ADDR=:8080 LOG_FORMAT=json
-EXPOSE 8080
+# The proxy listener must bind every interface inside the container; the
+# admin listener stays on loopback (EDGECACHE_ADMIN_ADDR, token required off
+# loopback). EDGECACHE_ORIGIN is required at run time.
+ENV EDGECACHE_ADDR=0.0.0.0:8081 LOG_FORMAT=json
+EXPOSE 8081
 USER nonroot:nonroot
 
 ENTRYPOINT ["/api"]

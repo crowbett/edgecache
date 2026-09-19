@@ -131,9 +131,9 @@ tasks:
       - docker build -t {{.IMAGE}} --build-arg VERSION={{.VERSION}} .
 
   docker:run:
-    desc: Run the container on :8080
+    desc: Run the container on :8081 in front of EDGECACHE_ORIGIN (default http://host.docker.internal:8082, see `task origin`)
     cmds:
-      - docker run --rm -p 8080:8080 -e LOG_FORMAT=text {{.IMAGE}}
+      - docker run --rm -p 8081:8081 -e LOG_FORMAT=text -e EDGECACHE_ORIGIN={{.EDGECACHE_ORIGIN | default "http://host.docker.internal:8082"}} {{.IMAGE}}
 
   clean:
     cmds:
