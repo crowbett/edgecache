@@ -754,8 +754,16 @@ func (s *Store) retireGenerationsLocked(k cachekey.Key, old *fileEntry) {
 
 // --- entry callbacks ---
 
+// open checks the generation and opens the body under the key's stripe lock,
+// the same lock publish holds across its rename + retire: without it a reader
+// could see stateLive, lose the race to the rename and open the NEW body under
+// the old meta (seen once in 10k concurrent reads on Linux, where the rename
+// over an open path succeeds).
 func (fe *fileEntry) open() (io.ReadCloser, error) {
 	s := fe.s
+	pm := s.stripe(fe.key)
+	pm.Lock()
+	defer pm.Unlock()
 	s.mu.Lock()
 	st := fe.state
 	s.mu.Unlock()
