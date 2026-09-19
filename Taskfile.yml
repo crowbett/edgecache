@@ -36,9 +36,24 @@ tasks:
       - "{{.BIN}}"
 
   run:
-    desc: Run the cache in front of ORIGIN_URL (http://127.0.0.1:8100)
+    desc: Run the cache on EDGECACHE_ADDR (127.0.0.1:8081) in front of EDGECACHE_ORIGIN (required, e.g. http://127.0.0.1:8082)
     cmds:
       - go run {{.MAIN}}
+
+  origin:
+    desc: Run the slow benchmark origin on ORIGIN_ADDR (:8082)
+    cmds:
+      - go run ./cmd/slow-origin
+
+  bench:
+    desc: Go microbenchmarks for the hot path (-benchmem)
+    cmds:
+      - go test -run '^$' -bench . -benchmem ./internal/...
+
+  load:
+    desc: oha load run against slow-origin (scripts/cache.ps1, written at step 12)
+    cmds:
+      - '{{if eq OS "windows"}}pwsh -NoProfile -Command "if (Test-Path scripts/cache.ps1) { pwsh -NoProfile -File scripts/cache.ps1 } else { Write-Host ''see scripts/cache.ps1 (not written yet)'' }"{{else}}echo "see scripts/cache.ps1"{{end}}'
 
   dev:
     desc: Hot reload with air (go install github.com/air-verse/air@latest)

@@ -1,38 +1,72 @@
 # edgecache
 
-Go HTTP API on the standard library (`net/http` 1.22 method patterns, `log/slog`) plus OpenTelemetry. Module `github.com/crowbett/edgecache`.
-Global Go conventions from `~/.claude/CLAUDE.md` apply; this file is only what is specific here.
+RFC 9111 HTTP caching reverse proxy in Go: freshness/validation, stale-while-revalidate / stale-if-error,
+Vary, singleflight collapse with a detached leader, memory + disk tiers, purge API, hand-written Prometheus
+text. Standard library only (`net/http` 1.22 patterns, `log/slog`, `crypto/sha256`, `container/list`); the
+template's OTel stack stays, off by default. Module `github.com/crowbett/edgecache`, Go 1.27.
+Global Go conventions from `~/.claude/CLAUDE.md` apply. The design record (every port signature, the config
+table, data flow, teardown stages, fanout and frozen types) is `docs/PLAN.md`; read it before changing a contract.
 
 ## Layout
-- `cmd/edgecache/main.go` - config -> logger -> `http.Server` -> `signal.NotifyContext` graceful shutdown.
-- `internal/config/` - env-driven `config.Config` (`HTTP_ADDR`, `LOG_LEVEL`, `LOG_FORMAT`, `REQUEST_TIMEOUT`, ...).
-- `internal/http/` - `handlers.go` (router + handlers + `writeJSON`/`writeError`), `middleware.go`
-  (`Chain`, `RequestID`, `Tracing`, `Logging`, `Recover`, `Timeout`, `TagRoute`), `handlers_test.go` (table-driven `TestRoutes`).
-- `internal/otel/` - OpenTelemetry bootstrap (OTLP gRPC traces + metrics, slog bridge); read it before touching tracing.
-- `db/migrations/` (goose) and `db/queries/` (sqlc) appear once `/db bootstrap` runs; generated code
-  lands in `internal/db/sqlc/` and is committed, never hand-edited.
-- `compose.yaml` - api + postgres:17 + redis:7 with healthchecks. `Dockerfile` - distroless static, non-root.
+- `cmd/edgecache/main.go` - wiring only: config -> logger -> otel -> store -> origin -> cache -> two servers ->
+  staged teardown. `cmd/edgecache/ports_test.go` pins which concrete types satisfy the consumer-defined ports.
+- `cmd/slow-origin/main.go` - benchmark origin (`ORIGIN_ADDR/_LATENCY/_JITTER/_BODY_BYTES/_CACHE_CONTROL/_KEYSPACE`).
+- `internal/config/` - env -> `config.Config`, joined validation at startup (`Validate` probes the disk dir).
+- `internal/http/` - template middleware chain (`Chain`, `RequestID`, `Tracing`, `Logging`, `Recover`, `Timeout`,
+  `TagRoute`, `Readiness`), unchanged. `internal/otel/` - OTel bootstrap.
+- `internal/cachekey/` - `Key [32]byte`, `Canonical`, `Primary`, `Secondary`, `NormalizeVary`. stdlib only.
+- `internal/rfc9111/` - pure policy: directives, `Storable`, `Lifetime`, `Age`, `Evaluate`, `ConditionalRequest`,
+  `Merge304`, `StripHopByHop`. stdlib only.
+- `internal/store/` - port types (`Meta`, `Entry`, `Variant`, `Writer`, `Stats`, sentinels). No I/O.
+- `internal/memstore/` (sharded LRU, byte budget), `internal/diskstore/` (content-addressed files, temp+rename,
+  meta last, scan recovery, refcounts + tombstones), `internal/tiered/` (memory in front of disk).
+- `internal/collapse/` - generic `Group[T]` singleflight, leader on a root-derived context, `TryStart`.
+- `internal/origin/` - upstream client: base URL, Host override, hop-by-hop strip, `Via`, retry-once.
+- `internal/tagindex/` - surrogate keys + URL prefixes -> keys, for purge.
+- `internal/cache/` - the engine: `Store`/`Fetcher`/`Recorder` ports, `Handler`, hit/miss/revalidate/stale
+  paths, tee copy with orphan fetch, `Purge`, `Run` (janitor), `Drain`.
+- `internal/metrics/` - hand-written Prometheus text registry + JSON snapshot; satisfies `cache.Recorder`.
+- `internal/server/` - route tables and the two `http.Server`s (proxy listener, loopback admin listener).
+- `internal/bench/` - hot-path microbenchmarks; `scripts/` - `_lib.ps1`, `cache.ps1`, `pgo.ps1`, `bench.ps1`.
+
+## The three-layer rule
+1. `internal/rfc9111` is **pure policy**: headers and values in, decisions out. No I/O, no goroutines, no clock of
+   its own - `now time.Time` is always a parameter. Every rule is a table test with a fixed clock; nothing in the
+   package (or its tests) calls `time.Now()`.
+2. `internal/store` + `memstore`/`diskstore`/`tiered` are **dumb keyed blob storage**: bytes, budgets, refcounts,
+   atomic publish, per-tier stats. Zero HTTP semantics - they never read a header.
+3. `internal/cache` is the **engine** joining them; `internal/server` mounts it. Imports flow one way:
+   `server -> cache -> {rfc9111, cachekey, store, origin, collapse, tagindex, metrics}`; `tiered -> {store, memstore,
+   diskstore}`; `memstore|diskstore -> store`; `store -> rfc9111`; `rfc9111`, `cachekey` -> stdlib only.
+   No cycles, no `util`/`common`/`models`.
 
 ## Commands (Taskfile.yml)
-- `task run` / `task dev` (air hot reload) / `task build` (-> `bin/`)
-- `task test` (`go test -race -count=1 ./...`, needs a C compiler) or `task test:fast` (no -race)
-- `task vet`, `task lint` (`golangci-lint run ./...`), `task fmt`, `task vuln`, `task check` (tidy+vet+lint+test:fast)
-- `task up` / `task down` - compose stack; `/docker-up` diagnoses a stuck stack.
+- `task run` (needs `EDGECACHE_ORIGIN`), `task origin` (slow-origin on :8082), `task build`, `task dev` (air)
+- `task test` (`go test -race -count=1 ./...`) / `task test:fast`, `task vet`, `task lint`, `task fmt`, `task check`
+- `task bench` (`go test -run '^$' -bench . -benchmem ./internal/...`), `task load` (`scripts/cache.ps1`, oha)
 
 ## Conventions specific to this repo
-- Routes are registered once, in `registerRoutes` (`internal/http/handlers.go`), as
-  `mux.HandleFunc("METHOD /path", handler)`; the `NewRouter*` constructors all build on it and
-  `wrap` applies the middleware stack (Recover sits inside Timeout, TagRoute innermost).
-  Every new route gets a case in the `TestRoutes` table. `/add-handler` does the whole wiring.
-- Handlers only decode, validate, call, encode. No DB access in `internal/http`; put it behind a
-  small consumer-defined interface and inject it through the router constructor.
-- Errors to clients go through `writeError` (stable strings). Internals are logged with the request id
-  (`RequestIDFrom(ctx)`), never returned in the body.
-- Readiness: flip `Readiness.Set(false)` while draining; `/healthz` is liveness only.
-- DB: goose migrations + sqlc queries via `/db` (repo-bound) or `/go-migrate` (general). `DROP TABLE`
-  in a Down migration is always `IF EXISTS`.
-- `.golangci.yml` is v2 with gofumpt+goimports formatters; hooks format on save, don't run them by hand.
+- **Frozen types** (changed only by the integrator, together with `docs/PLAN.md`): `store.Meta`, `store.Writer`,
+  `cache.Store`, `cache.Fetcher`, `cache.Recorder`, `rfc9111.Resp`, `rfc9111.Decision`, `config.Config`. A lane
+  that needs a change files it in its report instead of editing in place. Every other exported signature in the
+  step-1 stubs is the contract the lanes compile against: replace bodies, keep signatures, add freely.
+- Ports are consumer-defined (`cache.Store`, `cache.Fetcher`, `cache.Recorder`, `server.Purger`, `tiered.Tier`);
+  `cmd/edgecache/ports_test.go` is where satisfaction is asserted, not in the implementing package.
+- The proxy handler is mounted **without** `Timeout`/`http.TimeoutHandler` (aigw's streaming lesson); its budget
+  is the origin context. Only the admin listener goes through the full template stack.
+- A miss streams: one loop writes to the store writer and the client; a client write error does not abort the
+  fetch (up to `ORPHAN_MAX_BYTES`). The collapse leader runs on a root-derived context, never the caller's.
+- Metric labels are fixed enums only (never a URL, never a client header). Responses carry
+  `X-Cache: HIT|MISS|STALE|REVALIDATED|BYPASS`, `Age`, `X-Cache-Reason` on bypass, `X-Cache-Key` in debug builds.
+- Every deviation from the RFC is a named config key defaulting to spec-compliant (`CACHE_AUTHORIZATION=false`,
+  `DEFAULT_SWR=0s`). `Warning` is never emitted.
+- Errors to clients on the admin listener go through `writeError` (stable strings); internals are logged with the
+  request id, never returned in the body.
+- `.golangci.yml` is v2 with gofumpt+goimports formatters; hooks format on save, don't run them by hand. Every
+  exported identifier is documented (revive `exported`). Don't fix an "unused" stub with `//nolint`.
 
 ## Definition of done
-`go build ./...`, `go vet ./...`, `go test -race -count=1 ./...` (or `task test:fast` if no C compiler,
-say which), and `golangci-lint run ./...` all green. `/go-test` and `/go-lint` run these with fixes.
+`go build ./...`, `go vet ./...`, `go test -race -count=1 ./...`, `golangci-lint run ./...` all green (say which
+you ran), plus - for step 12 and any perf change - `scripts/cache.ps1` numbers (mode, rps, p50/p90/p99, hit-ratio
+from `/metrics` deltas, origin-rps) recorded in `README.md` and `results/<ts>/summary.md`, and `.bench/baseline.txt`
+compared with benchstat.
