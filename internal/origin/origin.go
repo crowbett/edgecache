@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	pathpkg "path"
 	"strings"
 	"syscall"
 	"time"
@@ -250,25 +251,58 @@ func (o *Origin) CloseIdleConnections() {
 }
 
 // joinPath appends the request path to the base path, keeping the request's
-// raw (escaped) form when it has one.
+// raw (escaped) form when it has one. Dot segments ("." and "..", also in
+// their percent-encoded spelling, which net/url has already decoded into
+// Path) are resolved against the request path alone before joining, so a
+// client cannot climb out of Base.Path with "/../".
 func joinPath(base, req *url.URL) (path, rawPath string) {
 	bp := strings.TrimSuffix(base.Path, "/")
-	rp := req.Path
-	if rp == "" {
-		rp = "/"
-	} else if !strings.HasPrefix(rp, "/") {
-		rp = "/" + rp
-	}
+	rp := cleanRequestPath(req.Path)
 	path = bp + rp
 	if req.RawPath != "" || base.RawPath != "" {
 		brp := strings.TrimSuffix(base.EscapedPath(), "/")
 		rrp := req.EscapedPath()
+		if rp != req.Path {
+			// The raw form described the uncleaned path; re-escape the clean one.
+			rrp = (&url.URL{Path: rp}).EscapedPath()
+		}
 		if !strings.HasPrefix(rrp, "/") {
 			rrp = "/" + rrp
 		}
 		rawPath = brp + rrp
 	}
 	return path, rawPath
+}
+
+// cleanRequestPath returns p rooted at "/" with "." and ".." segments removed
+// (RFC 3986 §5.2.4), never above "/". A trailing slash survives; a path with
+// no dot segment is returned unchanged so "//" and encoded slashes stay as
+// the client sent them.
+func cleanRequestPath(p string) string {
+	switch {
+	case p == "":
+		return "/"
+	case !strings.HasPrefix(p, "/"):
+		p = "/" + p
+	}
+	if !hasDotSegment(p) {
+		return p
+	}
+	c := pathpkg.Clean(p)
+	if strings.HasSuffix(p, "/") && c != "/" {
+		c += "/"
+	}
+	return c
+}
+
+// hasDotSegment reports whether any "/"-separated segment of p is "." or "..".
+func hasDotSegment(p string) bool {
+	for seg := range strings.SplitSeq(p, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // countingBody wraps a request body and remembers whether any byte was read,

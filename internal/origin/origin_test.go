@@ -343,6 +343,18 @@ func TestJoinPath(t *testing.T) {
 		{"http://h/base", "", "/base/"},
 		{"http://h", "/a%20b", "/a%20b"},
 		{"http://h/p%20q", "/a%20b", "/p%20q/a%20b"},
+		// Dot segments are resolved against the request path alone, never the base.
+		{"http://h/base", "/../x", "/base/x"},
+		{"http://h/base", "/a/../../x", "/base/x"},
+		{"http://h/base", "/a/..", "/base/"},
+		{"http://h/base", "/a/./b/", "/base/a/b/"},
+		{"http://h/base", "/%2e%2e/x", "/base/x"},
+		{"http://h/p%20q", "/..%2F%2e%2e/a%20b", "/p%20q/a%20b"},
+		{"http://h", "/..", "/"},
+		// No dot segment: double slashes and encoded slashes pass through untouched.
+		{"http://h/base", "/a//b", "/base/a//b"},
+		{"http://h/base", "/a%2Fb", "/base/a%2Fb"},
+		{"http://h/base", "/.hidden/..x", "/base/.hidden/..x"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.base+"+"+tc.req, func(t *testing.T) {
@@ -355,6 +367,49 @@ func TestJoinPath(t *testing.T) {
 				t.Fatalf("joinPath = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestDoCannotEscapeBasePath pins the security fix: a request path with ".."
+// segments is resolved before it is joined to Base.Path, so the upstream
+// request stays under the configured prefix.
+func TestDoCannotEscapeBasePath(t *testing.T) {
+	t.Parallel()
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.RequestURI())
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	o := newOrigin(t, srv.URL+"/public", nil)
+
+	for _, target := range []string{
+		"http://edge/../secret",
+		"http://edge/a/../../secret",
+		"http://edge/%2e%2e/secret",
+		"http://edge/..%2Fsecret",
+		"http://edge/./../secret?q=1",
+	} {
+		resp, err := o.Do(context.Background(), httptest.NewRequest(http.MethodGet, target, http.NoBody))
+		if err != nil {
+			t.Fatalf("%s: %v", target, err)
+		}
+		_ = resp.Body.Close()
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, uri := range seen {
+		if !strings.HasPrefix(uri, "/public/secret") {
+			t.Fatalf("upstream saw %q: escaped the base path", uri)
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("upstream saw %d requests, want 5", len(seen))
 	}
 }
 
