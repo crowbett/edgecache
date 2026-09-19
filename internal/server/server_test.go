@@ -129,6 +129,8 @@ func TestPurgeAuthMatrix(t *testing.T) {
 		{"token missing", token, "", "127.0.0.1:1234", http.StatusUnauthorized, false},
 		{"token wrong", token, "nope", "127.0.0.1:1234", http.StatusForbidden, false},
 		{"token wrong same length", token, "s3cre7", "127.0.0.1:1234", http.StatusForbidden, false},
+		{"token prefix", token, "s3cre", "127.0.0.1:1234", http.StatusForbidden, false},
+		{"token with suffix", token, token + "x", "127.0.0.1:1234", http.StatusForbidden, false},
 		{"no token, loopback v4", "", "", "127.0.0.1:5555", http.StatusOK, true},
 		{"no token, loopback v6", "", "", "[::1]:5555", http.StatusOK, true},
 		{"no token, remote", "", "", "192.0.2.1:1234", http.StatusForbidden, false},
@@ -450,6 +452,28 @@ func TestIsLoopbackAddr(t *testing.T) {
 	} {
 		if got := isLoopbackAddr(addr); got != want {
 			t.Errorf("isLoopbackAddr(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
+func TestTokenEqual(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		got, want string
+		eq        bool
+	}{
+		{"s3cret", "s3cret", true},
+		{"", "", true},
+		{"s3cret", "s3cre", false},
+		{"s3cre", "s3cret", false},
+		{"s3cret", "S3CRET", false},
+		{"", "s3cret", false},
+		{strings.Repeat("a", 4096), strings.Repeat("a", 4096), true},
+		{strings.Repeat("a", 4096), strings.Repeat("a", 4095) + "b", false},
+	}
+	for _, tc := range cases {
+		if got := tokenEqual(tc.got, tc.want); got != tc.eq {
+			t.Errorf("tokenEqual(%q, %q) = %v, want %v", tc.got, tc.want, got, tc.eq)
 		}
 	}
 }

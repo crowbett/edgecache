@@ -13,6 +13,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -235,7 +236,7 @@ func authorize(cfg Config, r *http.Request) (int, string) {
 		if got == "" {
 			return http.StatusUnauthorized, "missing " + PurgeHeader
 		}
-		if subtle.ConstantTimeCompare([]byte(got), []byte(cfg.PurgeToken)) != 1 {
+		if !tokenEqual(got, cfg.PurgeToken) {
 			return http.StatusForbidden, "bad " + PurgeHeader
 		}
 		return 0, ""
@@ -244,6 +245,15 @@ func authorize(cfg Config, r *http.Request) (int, string) {
 		return http.StatusForbidden, "purge requires " + PurgeHeader + " or a loopback peer"
 	}
 	return 0, ""
+}
+
+// tokenEqual compares a presented credential with the configured one in
+// constant time. Both sides are hashed first so the comparison takes the same
+// time whatever the lengths: subtle.ConstantTimeCompare alone returns early on
+// a length mismatch, which would let a caller learn the token's length.
+func tokenEqual(got, want string) bool {
+	g, w := sha256.Sum256([]byte(got)), sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(g[:], w[:]) == 1
 }
 
 // doPurge runs one purge through the engine and writes {"purged":N[,"keys":[...]]}.
