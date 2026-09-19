@@ -274,3 +274,20 @@ func TestIsLoopback(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateRedactsOriginPassword pins that a userinfo password in
+// EDGECACHE_ORIGIN never reaches the joined validation error (which is logged).
+func TestValidateRedactsOriginPassword(t *testing.T) {
+	setBase(t, map[string]string{"EDGECACHE_ORIGIN": "ftp://user:hunter2@origin.test/base?x=1"})
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation errors for an ftp origin with a query")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "hunter2") {
+		t.Fatalf("error leaks the origin password: %q", msg)
+	}
+	if !strings.Contains(msg, "user:xxxxx@origin.test") {
+		t.Fatalf("error should name the redacted origin: %q", msg)
+	}
+}

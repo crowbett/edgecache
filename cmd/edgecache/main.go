@@ -187,7 +187,7 @@ func run() error {
 	}
 	logger.Info("edgecache starting",
 		slog.String("version", version),
-		slog.String("origin", cfg.Origin.String()),
+		slog.String("origin", cfg.Origin.Redacted()),
 		slog.String("env", cfg.Env),
 		slog.Int64("mem_bytes", cfg.MemBytes),
 		slog.String("disk_dir", cfg.DiskDir),
@@ -307,7 +307,7 @@ func newStore(cfg config.Config, logger *slog.Logger) (*tiered.Store, error) {
 // configSummary is the non-secret config subset /admin/stats shows.
 func configSummary(cfg config.Config) map[string]any {
 	return map[string]any{
-		"origin":                cfg.Origin.String(),
+		"origin":                cfg.Origin.Redacted(),
 		"origin_host":           cfg.OriginHost,
 		"origin_header_timeout": cfg.OriginHeaderTimeout.String(),
 		"origin_timeout":        cfg.OriginTimeout.String(),

@@ -247,12 +247,12 @@ func (c Config) Validate() error {
 	if c.Origin != nil {
 		switch {
 		case c.Origin.Scheme != "http" && c.Origin.Scheme != "https":
-			errs = append(errs, fmt.Errorf("EDGECACHE_ORIGIN %q: scheme must be http or https", c.Origin))
+			errs = append(errs, fmt.Errorf("EDGECACHE_ORIGIN %q: scheme must be http or https", c.Origin.Redacted()))
 		case c.Origin.Host == "":
-			errs = append(errs, fmt.Errorf("EDGECACHE_ORIGIN %q: host is required", c.Origin))
+			errs = append(errs, fmt.Errorf("EDGECACHE_ORIGIN %q: host is required", c.Origin.Redacted()))
 		}
 		if c.Origin.RawQuery != "" || c.Origin.Fragment != "" {
-			errs = append(errs, fmt.Errorf("EDGECACHE_ORIGIN %q: query and fragment are not allowed", c.Origin))
+			errs = append(errs, fmt.Errorf("EDGECACHE_ORIGIN %q: query and fragment are not allowed", c.Origin.Redacted()))
 		}
 	}
 	if c.OriginHost != "" && strings.ContainsAny(c.OriginHost, " \t/") {
