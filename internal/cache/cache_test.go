@@ -1007,6 +1007,42 @@ func TestNewRebuildsTagIndexFromWalker(t *testing.T) {
 	}
 }
 
+// TestJanitorReconcilesTagIndex pins the bound on the tag index: an entry the
+// store evicted on its own (LRU, budget) loses its row on the next janitor
+// tick, while rows for resident entries and rows added during the walk stay.
+func TestJanitorReconcilesTagIndex(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	h.o.set(func(r *http.Request) (reply, error) {
+		return rep(200, map[string]string{"Cache-Control": "max-age=60", "Cache-Tag": "t"}, r.URL.Path), nil
+	})
+	for _, p := range []string{"/a/1", "/a/2", "/a/3"} {
+		expect(t, h.do(http.MethodGet, "http://example.com"+p), 200, "MISS", p)
+	}
+	if n := h.c.TagIndexLen(); n != 3 {
+		t.Fatalf("index has %d rows, want 3", n)
+	}
+	// The store evicts two entries behind the engine's back.
+	k1 := cachekey.Primary(http.MethodGet, mustURL(t, "http://example.com/a/1"))
+	k2 := cachekey.Primary(http.MethodGet, mustURL(t, "http://example.com/a/2"))
+	if n, _ := h.st.Delete(context.Background(), k1, k2); n != 2 {
+		t.Fatalf("deleted %d, want 2", n)
+	}
+	h.c.janitor(context.Background())
+	if n := h.c.TagIndexLen(); n != 1 {
+		t.Fatalf("index has %d rows after reconcile, want 1", n)
+	}
+	res, err := h.c.Purge(context.Background(), PurgeRequest{Tag: "t"})
+	if err != nil || res.Purged != 1 {
+		t.Fatalf("purge tag after reconcile: %+v %v", res, err)
+	}
+	// An empty index and a store without Walk are both no-ops.
+	h.c.janitor(context.Background())
+	if n := h.c.TagIndexLen(); n != 0 {
+		t.Fatalf("index has %d rows, want 0", n)
+	}
+}
+
 func TestRunPushesGaugesAndDrainStops(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, func(c *Config) { c.JanitorInterval = 5 * time.Millisecond })

@@ -100,3 +100,42 @@ func TestConcurrentAccess(t *testing.T) {
 		t.Fatalf("Len = %d, want 32", ix.Len())
 	}
 }
+
+func TestSnapshotRemoveStale(t *testing.T) {
+	t.Parallel()
+	ix := NewIndex()
+	k1, k2, k3 := key("1"), key("2"), key("3")
+	ix.Add(k1, "http://a/1", []string{"t"})
+	ix.Add(k2, "http://a/2", []string{"t"})
+	ix.Add(k3, "http://a/3", []string{"u"})
+
+	snap := ix.Snapshot()
+	if len(snap) != 3 {
+		t.Fatalf("Snapshot = %d rows, want 3", len(snap))
+	}
+	// k2 is re-added after the snapshot (a fresh commit); k3 is evicted.
+	ix.Add(k2, "http://a/2", []string{"t", "v"})
+	alive := func(k cachekey.Key) bool { return k == k1 }
+	if n := ix.RemoveStale(snap, alive); n != 1 {
+		t.Fatalf("RemoveStale = %d, want 1 (k3 only)", n)
+	}
+	if ix.Len() != 2 {
+		t.Fatalf("Len = %d, want 2", ix.Len())
+	}
+	if _, ok := ix.URL(k3); ok {
+		t.Fatal("k3 should have been dropped")
+	}
+	if got := sorted(ix.ByTag("v")); !slices.Equal(got, sorted([]cachekey.Key{k2})) {
+		t.Fatalf("re-added k2 lost: ByTag(v) = %v", got)
+	}
+	if ix.ByTag("u") != nil {
+		t.Fatal("tag u should be gone with k3")
+	}
+	// A second pass with the stale snapshot is a no-op for the replaced row.
+	if n := ix.RemoveStale(snap, func(cachekey.Key) bool { return false }); n != 1 {
+		t.Fatalf("second RemoveStale = %d, want 1 (k1 only; k2's row is newer)", n)
+	}
+	if n := ix.RemoveStale(nil, func(cachekey.Key) bool { return false }); n != 0 {
+		t.Fatalf("empty snapshot removed %d", n)
+	}
+}

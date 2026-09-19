@@ -325,7 +325,8 @@ func (c *Cache) Run(ctx context.Context) {
 	}
 }
 
-// janitor is one tick: sweep tombstones, refresh the gauges.
+// janitor is one tick: sweep tombstones, drop tag-index rows whose entries
+// the store evicted, refresh the gauges.
 func (c *Cache) janitor(ctx context.Context) {
 	if sw, ok := c.store.(Sweeper); ok {
 		n, err := sw.Sweep(ctx)
@@ -335,7 +336,40 @@ func (c *Cache) janitor(ctx context.Context) {
 			c.log.Debug("cache: sweep", slog.Int("swept", n))
 		}
 	}
+	c.reconcileTags(ctx)
 	c.rec.StoreGauges(c.store.Stats())
+}
+
+// reconcileTags bounds the tag index by the store: the store evicts on its
+// own (LRU, variant cap, budget) without telling the engine, so rows would
+// otherwise accumulate for every URL ever cached. The index is snapshotted
+// before the walk, so a row added while walking is never removed.
+func (c *Cache) reconcileTags(ctx context.Context) {
+	wk, ok := c.store.(Walker)
+	if !ok {
+		return
+	}
+	snap := c.tags.Snapshot()
+	if len(snap) == 0 {
+		return
+	}
+	alive := make(map[cachekey.Key]struct{}, len(snap))
+	err := wk.Walk(ctx, func(k cachekey.Key, _ store.Meta) error {
+		alive[k] = struct{}{}
+		return nil
+	})
+	if err != nil {
+		// A partial walk would look like mass eviction; keep the rows.
+		c.log.Warn("cache: tag index reconcile skipped", slog.Any("err", err))
+		return
+	}
+	n := c.tags.RemoveStale(snap, func(k cachekey.Key) bool {
+		_, ok := alive[k]
+		return ok
+	})
+	if n > 0 {
+		c.log.Debug("cache: tag index reconciled", slog.Int("dropped", n), slog.Int("kept", len(snap)-n))
+	}
 }
 
 // Stop cancels the engine's root context: every collapse leader and background

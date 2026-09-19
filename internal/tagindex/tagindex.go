@@ -10,17 +10,28 @@ import (
 	"github.com/crowbett/edgecache/internal/cachekey"
 )
 
-// record is what the index remembers about one key.
+// record is what the index remembers about one key; gen is the Add that
+// created the row, so a reconcile can tell a row it snapshotted from one
+// re-added since.
 type record struct {
 	url  string
 	tags []string
+	gen  uint64
 }
 
 // Index is a concurrency-safe tag and URL index.
 type Index struct {
 	mu   sync.RWMutex
+	gen  uint64
 	keys map[cachekey.Key]record
 	tags map[string]map[cachekey.Key]struct{}
+}
+
+// Stamp names one row at the time of a Snapshot; RemoveStale skips a key whose
+// row was re-added since.
+type Stamp struct {
+	Key cachekey.Key
+	gen uint64
 }
 
 // NewIndex returns an empty index.
@@ -44,7 +55,8 @@ func (ix *Index) Add(k cachekey.Key, url string, tags []string) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	ix.removeLocked(k)
-	ix.keys[k] = record{url: url, tags: clean}
+	ix.gen++
+	ix.keys[k] = record{url: url, tags: clean, gen: ix.gen}
 	for _, t := range clean {
 		set := ix.tags[t]
 		if set == nil {
@@ -105,6 +117,45 @@ func (ix *Index) ByPrefix(prefix string) []cachekey.Key {
 		}
 	}
 	return out
+}
+
+// Snapshot returns a stamp for every indexed row. Pair it with RemoveStale to
+// drop rows whose entries the store has since evicted: snapshot first, walk
+// the store, then RemoveStale with the walk's result, so a row added during
+// the walk is never touched.
+func (ix *Index) Snapshot() []Stamp {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	out := make([]Stamp, 0, len(ix.keys))
+	for k, rec := range ix.keys {
+		out = append(out, Stamp{Key: k, gen: rec.gen})
+	}
+	return out
+}
+
+// RemoveStale removes every snapshotted row that alive reports gone and that
+// no Add has replaced since the snapshot; it returns how many went. alive is
+// called without the index lock held.
+func (ix *Index) RemoveStale(snap []Stamp, alive func(cachekey.Key) bool) int {
+	var dead []Stamp
+	for _, st := range snap {
+		if !alive(st.Key) {
+			dead = append(dead, st)
+		}
+	}
+	if len(dead) == 0 {
+		return 0
+	}
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	n := 0
+	for _, st := range dead {
+		if rec, ok := ix.keys[st.Key]; ok && rec.gen == st.gen {
+			ix.removeLocked(st.Key)
+			n++
+		}
+	}
+	return n
 }
 
 // URL returns the canonical URL recorded for k and whether k is indexed.
