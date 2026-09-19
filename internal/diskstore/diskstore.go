@@ -18,6 +18,7 @@ package diskstore
 
 import (
 	"bufio"
+	"bytes"
 	"container/list"
 	"context"
 	"encoding/hex"
@@ -526,9 +527,9 @@ func (s *Store) clearTemps() {
 
 // writeMeta publishes m for k atomically: temp, Sync, rename. Callers hold the key's stripe.
 func (s *Store) writeMeta(k cachekey.Key, m store.Meta) error {
-	b, err := json.Marshal(metaFile{Version: metaVersion, Key: k.String(), Meta: m})
+	b, err := encodeMeta(k, m)
 	if err != nil {
-		return fmt.Errorf("diskstore: encode meta: %w", err)
+		return err
 	}
 	f, tmp, err := s.createTemp(k, metaExt)
 	if err != nil {
@@ -1004,25 +1005,65 @@ func (s *Store) loadPair(sub, base, metaPath, bodyPath string) (cachekey.Key, st
 	if err != nil {
 		return k, store.Meta{}, 0, fmt.Errorf("read meta: %w", err)
 	}
-	var mf metaFile
-	if err := json.Unmarshal(b, &mf); err != nil {
-		return k, store.Meta{}, 0, fmt.Errorf("decode meta: %w", err)
-	}
-	if mf.Version != metaVersion {
-		return k, store.Meta{}, 0, fmt.Errorf("meta version %d, want %d", mf.Version, metaVersion)
-	}
-	if mf.Key != base {
-		return k, store.Meta{}, 0, fmt.Errorf("meta names key %q", mf.Key)
+	m, err := decodeMeta(b, base)
+	if err != nil {
+		return k, store.Meta{}, 0, err
 	}
 	info, err := os.Stat(bodyPath)
 	if err != nil {
 		return k, store.Meta{}, 0, fmt.Errorf("stat body: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Size() != mf.Meta.Size {
-		return k, store.Meta{}, 0, fmt.Errorf("body is %d bytes, meta says %d", info.Size(), mf.Meta.Size)
+	if !info.Mode().IsRegular() || info.Size() != m.Size {
+		return k, store.Meta{}, 0, fmt.Errorf("body is %d bytes, meta says %d", info.Size(), m.Size)
 	}
 	s.log.Debug("diskstore: recovered", "key", base, "size", info.Size())
-	return k, mf.Meta, info.Size(), nil
+	return k, m, info.Size(), nil
+}
+
+// maxMetaBytes bounds a .meta file: a stored header block is at most
+// http.DefaultMaxHeaderBytes, and the rest of Meta is small, so anything
+// larger is corrupt (or hostile) and is dropped before being decoded.
+const maxMetaBytes = 2 << 20
+
+// encodeMeta is the on-disk form of a meta: the metaFile JSON envelope.
+func encodeMeta(k cachekey.Key, m store.Meta) ([]byte, error) {
+	b, err := json.Marshal(metaFile{Version: metaVersion, Key: k.String(), Meta: m})
+	if err != nil {
+		return nil, fmt.Errorf("diskstore: encode meta: %w", err)
+	}
+	return b, nil
+}
+
+// decodeMeta parses a .meta file for the key named by base (the file's hex
+// stem) and validates the envelope: size cap, version, key, a non-negative
+// body size and a status a response can carry. Unknown fields are rejected so
+// a foreign JSON document never becomes an entry.
+func decodeMeta(b []byte, base string) (store.Meta, error) {
+	if len(b) > maxMetaBytes {
+		return store.Meta{}, fmt.Errorf("meta is %d bytes, cap %d", len(b), maxMetaBytes)
+	}
+	var mf metaFile
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&mf); err != nil {
+		return store.Meta{}, fmt.Errorf("decode meta: %w", err)
+	}
+	if dec.More() {
+		return store.Meta{}, errors.New("decode meta: trailing data")
+	}
+	if mf.Version != metaVersion {
+		return store.Meta{}, fmt.Errorf("meta version %d, want %d", mf.Version, metaVersion)
+	}
+	if mf.Key != base {
+		return store.Meta{}, fmt.Errorf("meta names key %q", mf.Key)
+	}
+	if mf.Meta.Size < 0 {
+		return store.Meta{}, fmt.Errorf("meta size %d is negative", mf.Meta.Size)
+	}
+	if mf.Meta.Status < 100 || mf.Meta.Status > 999 {
+		return store.Meta{}, fmt.Errorf("meta status %d is not an HTTP status", mf.Meta.Status)
+	}
+	return mf.Meta, nil
 }
 
 func isHex(s string) bool {
