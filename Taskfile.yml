@@ -2,7 +2,7 @@
 version: "3"
 
 vars:
-  APP: api
+  APP: edgecache
   MAIN: ./cmd/edgecache
   BIN: bin/{{.APP}}{{exeExt}}
   IMAGE: '{{.APP}}:local'
@@ -36,7 +36,7 @@ tasks:
       - "{{.BIN}}"
 
   run:
-    desc: Run the API locally
+    desc: Run the cache in front of ORIGIN_URL (http://127.0.0.1:8100)
     cmds:
       - go run {{.MAIN}}
 
@@ -101,16 +101,6 @@ tasks:
     desc: Run the container on :8080
     cmds:
       - docker run --rm -p 8080:8080 -e LOG_FORMAT=text {{.IMAGE}}
-
-  up:
-    desc: docker compose up (api + postgres + redis)
-    cmds:
-      - docker compose up -d --build --wait
-
-  down:
-    desc: docker compose down (keeps volumes)
-    cmds:
-      - docker compose down
 
   clean:
     cmds:

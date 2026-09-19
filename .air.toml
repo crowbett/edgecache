@@ -3,9 +3,9 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  cmd = "go build -o ./tmp/api.exe ./cmd/edgecache"
-  bin = "./tmp/api.exe"
-  full_bin = "./tmp/api.exe"
+  cmd = "go build -o ./tmp/edgecache.exe ./cmd/edgecache"
+  bin = "./tmp/edgecache.exe"
+  full_bin = "./tmp/edgecache.exe"
   include_ext = ["go", "tpl", "tmpl", "html", "yaml", "yml", "toml"]
   exclude_dir = ["tmp", "bin", "vendor", "testdata", ".git"]
   exclude_regex = ["_test\\.go"]
