@@ -218,12 +218,14 @@ func TestRoundTrip(t *testing.T) {
 	rc, _ = held.Open()
 	w, _ := s.Writer(ctx, key(1), store.Meta{})
 	_, _ = w.Write([]byte("third"))
-	_, err = w.Commit(store.Meta{})
+	committed, err := w.Commit(store.Meta{})
 	_ = rc.Close()
 	held.Release()
 	switch {
 	case err == nil:
-		// Only NTFS refuses; elsewhere the rename goes through.
+		// Only NTFS refuses; elsewhere the rename goes through and Commit
+		// hands back the new generation held - release it like any Get.
+		committed.Release()
 		got, _ = s.Get(ctx, key(1))
 		if b := readBody(t, got); string(b) != "third" {
 			t.Errorf("body after rewrite = %q", b)
