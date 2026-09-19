@@ -1,0 +1,29 @@
+[
+  {
+    "mode": "warm",
+    "rps": 64807.1,
+    "p50_ms": 0.545,
+    "p90_ms": 2.164,
+    "p99_ms": 6.848,
+    "hit_ratio": 1.0,
+    "origin_rps": 0.0,
+    "success": 1.0,
+    "requests": 1945025,
+    "status": "200:1945025",
+    "outcomes": {
+      "bypass": 0,
+      "stale": 0,
+      "error": 0,
+      "miss": 0,
+      "hit": 1945089,
+      "revalidated": 0
+    },
+    "collapsed": 0,
+    "seconds": 30.0135393,
+    "connections": 64,
+    "duration": "30s",
+    "target": "proxy",
+    "tag": "nopgo-r2",
+    "raw": "01-warm.json"
+  }
+]

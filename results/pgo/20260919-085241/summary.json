@@ -1,0 +1,16 @@
+{
+  "mode": "warm",
+  "rps_nopgo": 43909.7,
+  "rps_pgo": 56922.6,
+  "delta_pct": 29.64,
+  "p50_nopgo": 0.609,
+  "p50_pgo": 0.581,
+  "p99_nopgo": 19.112,
+  "p99_pgo": 8.905,
+  "p99_delta_pct": -53.41,
+  "hit_nopgo": 0.999839478219729,
+  "hit_pgo": 0.999999684865674,
+  "rounds": 2,
+  "spread_nopgo": 92.2,
+  "spread_pgo": 14.27
+}

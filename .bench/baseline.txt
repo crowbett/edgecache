@@ -1,0 +1,72 @@
+goos: windows
+goarch: amd64
+pkg: github.com/crowbett/edgecache/internal/bench
+cpu: AMD Ryzen 7 3700X 8-Core Processor             
+BenchmarkKeyBuild-16         	 2466358	       487.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyBuild-16         	 2390464	       496.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyBuild-16         	 2352026	       503.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyBuild-16         	 2437377	       490.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyBuild-16         	 2409325	       492.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyBuild-16         	 2439136	       493.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyPrimary-16       	 4752410	       244.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyPrimary-16       	 4950543	       242.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyPrimary-16       	 4951428	       243.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyPrimary-16       	 4974103	       241.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyPrimary-16       	 4343352	       250.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeyPrimary-16       	 4535882	       246.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeySecondary-16     	 4866826	       244.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeySecondary-16     	 4991136	       242.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeySecondary-16     	 4958980	       242.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeySecondary-16     	 4940260	       242.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeySecondary-16     	 4900927	       242.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKeySecondary-16     	 4837833	       242.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseResponse-16    	 4920636	       240.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseResponse-16    	 5069103	       237.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseResponse-16    	 5025507	       239.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseResponse-16    	 5054390	       238.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseResponse-16    	 5056320	       238.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseResponse-16    	 5049025	       237.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseRequest-16     	 9718219	       118.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseRequest-16     	10243119	       116.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseRequest-16     	 9319932	       121.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseRequest-16     	10142338	       117.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseRequest-16     	 9939550	       117.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkParseRequest-16     	 9994819	       118.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEvaluateFresh-16    	 6730932	       175.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEvaluateFresh-16    	 6704314	       178.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEvaluateFresh-16    	 6899572	       174.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEvaluateFresh-16    	 6682503	       178.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEvaluateFresh-16    	 6863751	       178.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEvaluateFresh-16    	 6066586	       184.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAge-16              	 7373520	       163.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAge-16              	 7373991	       162.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAge-16              	 7380554	       160.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAge-16              	 7491393	       160.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAge-16              	 7407154	       161.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAge-16              	 7521331	       164.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkStripHopByHop-16    	  673664	      1587 ns/op	     968 B/op	      16 allocs/op
+BenchmarkStripHopByHop-16    	  775448	      1627 ns/op	     968 B/op	      16 allocs/op
+BenchmarkStripHopByHop-16    	  783847	      1675 ns/op	     968 B/op	      16 allocs/op
+BenchmarkStripHopByHop-16    	  763785	      1629 ns/op	     968 B/op	      16 allocs/op
+BenchmarkStripHopByHop-16    	  798163	      1604 ns/op	     968 B/op	      16 allocs/op
+BenchmarkStripHopByHop-16    	  815882	      1621 ns/op	     968 B/op	      16 allocs/op
+BenchmarkWriteHeaders-16     	 3246535	       376.0 ns/op	      32 B/op	       2 allocs/op
+BenchmarkWriteHeaders-16     	 3187864	       370.4 ns/op	      32 B/op	       2 allocs/op
+BenchmarkWriteHeaders-16     	 3044402	       390.5 ns/op	      32 B/op	       2 allocs/op
+BenchmarkWriteHeaders-16     	 3237439	       371.3 ns/op	      32 B/op	       2 allocs/op
+BenchmarkWriteHeaders-16     	 3112063	       382.1 ns/op	      32 B/op	       2 allocs/op
+BenchmarkWriteHeaders-16     	 3116055	       377.7 ns/op	      32 B/op	       2 allocs/op
+BenchmarkMemGetHit-16        	 5649278	       205.9 ns/op	79560.92 MB/s	     336 B/op	       2 allocs/op
+BenchmarkMemGetHit-16        	 6110025	       194.8 ns/op	84096.20 MB/s	     336 B/op	       2 allocs/op
+BenchmarkMemGetHit-16        	 5637746	       197.6 ns/op	82898.95 MB/s	     336 B/op	       2 allocs/op
+BenchmarkMemGetHit-16        	 6681060	       186.7 ns/op	87741.56 MB/s	     336 B/op	       2 allocs/op
+BenchmarkMemGetHit-16        	 5917404	       202.5 ns/op	80915.99 MB/s	     336 B/op	       2 allocs/op
+BenchmarkMemGetHit-16        	 6226539	       187.2 ns/op	87520.24 MB/s	     336 B/op	       2 allocs/op
+BenchmarkHitPath-16          	  677571	      1561 ns/op	10494.26 MB/s	     368 B/op	       4 allocs/op
+BenchmarkHitPath-16          	  808298	      1551 ns/op	10566.47 MB/s	     368 B/op	       4 allocs/op
+BenchmarkHitPath-16          	  726123	      1555 ns/op	10536.86 MB/s	     368 B/op	       4 allocs/op
+BenchmarkHitPath-16          	  789394	      1565 ns/op	10466.11 MB/s	     368 B/op	       4 allocs/op
+BenchmarkHitPath-16          	  796447	      1550 ns/op	10573.42 MB/s	     368 B/op	       4 allocs/op
+BenchmarkHitPath-16          	  813178	      1583 ns/op	10352.96 MB/s	     368 B/op	       4 allocs/op
+PASS
+ok  	github.com/crowbett/edgecache/internal/bench	79.197s

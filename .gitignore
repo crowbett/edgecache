@@ -29,6 +29,7 @@ CLAUDE.local.md
 
 # Benchmark artefacts (scripts/cache.ps1, pgo.ps1): keep only the summaries
 results/**
+!results/**/
 !results/**/summary.md
 !results/**/summary.json
 *.pprof

@@ -1,0 +1,29 @@
+[
+  {
+    "mode": "warm",
+    "rps": 60985.1,
+    "p50_ms": 0.574,
+    "p90_ms": 2.259,
+    "p99_ms": 7.71,
+    "hit_ratio": 1.0,
+    "origin_rps": 0.0,
+    "success": 1.0,
+    "requests": 1830225,
+    "status": "200:1830225",
+    "outcomes": {
+      "stale": 0,
+      "hit": 1830286,
+      "revalidated": 0,
+      "bypass": 0,
+      "miss": 0,
+      "error": 0
+    },
+    "collapsed": 0,
+    "seconds": 30.0120286,
+    "connections": 64,
+    "duration": "30s",
+    "target": "proxy",
+    "tag": "pgo-r1",
+    "raw": "01-warm.json"
+  }
+]

@@ -1,0 +1,10 @@
+date:      2026-09-19 11:06:51 -07:00
+elapsed:   80s
+cpu:       AMD Ryzen 7 3700X 8-Core Processor
+cores:     16 logical
+os:        Microsoft Windows NT 10.0.26200.0
+go:        go1.27.0 windows/amd64
+shell:     PowerShell 7.6.6
+command:   CGO_ENABLED=0 go test -run ^$ -bench . -benchmem -count 6 -timeout 1h ./internal/bench/...
+count:     6
+results:   C:\Users\corbe\dev\go\edgecache\.bench\baseline.txt
