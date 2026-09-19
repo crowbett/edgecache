@@ -397,3 +397,55 @@ editing in place.
 3. Persist the tag index, or accept that surrogate purges only cover entries whose metas were scanned at boot? Assumed
    rebuild from metas during recovery, no separate file.
 4. Schedule stream-sharing (alternative 3) as a P16 follow-up now, or only if the cold-cache p99 says so?
+
+## Hardening (2026-09-19)
+
+P16 pass on this repo. Baseline before touching anything: `go build`, `go vet`, `golangci-lint run`,
+`go test -race -count=3 ./...` all green on Windows; CI's latest run green.
+
+- **Vulns**: `govulncheck ./...` reports 0 reachable. Unreachable, not bumped: GO-2026-6443
+  (google.golang.org/grpc v1.83.1, server panic on a missing `:authority`; edgecache only uses grpc as an
+  OTLP *client*, off by default). Fixed in v1.83.2 if a dependency bump is wanted for other reasons.
+- **Security fixes** (each its own `fix(security)` commit with a pinning test):
+  - `origin.joinPath` resolved nothing: `GET /../secret` reached the origin as `/base/../secret` and escaped
+    `EDGECACHE_ORIGIN`'s path prefix. Dot segments (also `%2e%2e`) are now removed from the request path
+    before it is joined (`TestDoCannotEscapeBasePath`, `FuzzJoinPath`).
+  - `EDGECACHE_ORIGIN` userinfo (`http://user:pass@host`) was printed by the startup log, the joined
+    validation error and `/admin/stats`; all three use `url.URL.Redacted` now.
+  - `X-Purge-Token` compare returned early on a length mismatch; both sides are sha256-hashed before
+    `subtle.ConstantTimeCompare` so timing is independent of the token's length.
+  - The tag index grew for every URL ever cached (the store evicts without telling the engine): a client
+    cycling distinct URLs grew process memory without bound. The janitor now snapshots the index, walks
+    the store and drops rows whose entry is gone (generation-stamped, so a row re-added during the walk
+    survives). README follow-up closed.
+  - Disk meta decoder: 2 MiB cap, unknown fields and trailing data rejected, negative size / non-HTTP
+    status refused, so a foreign JSON file in the cache dir never becomes an entry.
+  - Dockerfile bound the template's `HTTP_ADDR=:8080`, which edgecache never read (container listened on
+    127.0.0.1:8081, unreachable); now `EDGECACHE_ADDR=0.0.0.0:8081`, admin stays loopback.
+- **Reviewed and accepted as is**: constant-time PURGE auth with loopback-only fallback; admin listener off
+  loopback requires a token (`config.Validate`); pprof only on the admin mux; `ReadHeaderTimeout` on both
+  servers (proxy has no `WriteTimeout` by design: streaming); `MaxBytesReader` 64 KiB on `/admin/purge`;
+  stable error strings, internals logged with the request id; `0o750`/`0o600` on disk state; the one
+  `int32` conversion is bounded and annotated; collapse and background maps are cleaned on completion;
+  request bodies for unsafe methods stream through uncapped (origin enforces its own limit).
+- **Fuzz**: 16 targets, each 60 s clean (`-parallel 4`), seed corpora live in the tests, nothing under
+  `testdata/fuzz` (every crasher found was an over-strict property in the harness, tightened, none in
+  the code). Execs at 60 s: ParseRequest 1.01M, ParseResponse 0.92M, ParseDate 0.95M, NotModified 0.98M,
+  Merge304 0.66M, StripHopByHop 0.80M, Policy 0.78M, Canonical 1.16M, NormalizeVary 0.82M,
+  Secondary 1.63M, DecodeMeta 0.62M, ParseBytes 0.77M, JoinPath 0.37M, RequestURL 0.48M,
+  OriginHeaders (whole engine) 76k.
+- **Coverage** (core packages, before -> after): rfc9111 95.9 -> 96.5, cache 84.4 -> 86.1,
+  memstore 95.8 -> 95.8, diskstore 84.9 -> 85.3, tiered 85.5 -> 85.5, collapse 96.6 -> 96.6,
+  tagindex 100 -> 100, origin 88.0 -> 91.7, cachekey 96.6 -> 97.3. All were above the 80 % bar before
+  the pass; no coverage-only tests were added.
+- **Races**: `go test -race -count=3 ./...` green on Windows and on Linux (`golang:1.27` in Docker), the
+  diskstore stripe-lock fix from the previous commit holds at count=3.
+- **README numbers**: no hot path a README table measures changed (joinPath is on the origin leg,
+  the reconcile runs on the janitor tick, decodeMeta at scan), so the tables still point at
+  `results/20260919-085016`, `results/pgo/20260919-085634` and `.bench/baseline.txt` unchanged.
+- **CI**: green on ubuntu + windows + lint + vuln + docker after the push (see the run linked in the
+  hardening report). `.gitattributes` keeps `metrics.golden` and `default.pgo` byte-exact on Windows.
+- **goreleaser**: not applicable (edgecache is a service, not one of the CLI repos).
+- **Open**: `X-Forwarded-Proto` from any client is trusted for the key scheme and forwarded upstream
+  (consistent between key and origin, so no cross-client poisoning, but a trusted-proxy list is a design
+  decision); `warned` (variant-cap warn-once) keeps one 32-byte entry per primary key that hit the cap.
