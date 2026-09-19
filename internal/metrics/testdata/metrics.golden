@@ -1,0 +1,205 @@
+# HELP edgecache_requests_total Client requests handled, by cache outcome.
+# TYPE edgecache_requests_total counter
+edgecache_requests_total{outcome="hit"} 2
+edgecache_requests_total{outcome="miss"} 1
+edgecache_requests_total{outcome="stale"} 1
+edgecache_requests_total{outcome="revalidated"} 1
+edgecache_requests_total{outcome="bypass"} 1
+edgecache_requests_total{outcome="error"} 2
+# HELP edgecache_responses_total Client responses, by status class.
+# TYPE edgecache_responses_total counter
+edgecache_responses_total{status_class="1xx"} 0
+edgecache_responses_total{status_class="2xx"} 4
+edgecache_responses_total{status_class="3xx"} 1
+edgecache_responses_total{status_class="4xx"} 1
+edgecache_responses_total{status_class="5xx"} 1
+edgecache_responses_total{status_class="error"} 0
+edgecache_responses_total{status_class="other"} 1
+# HELP edgecache_response_bytes_total Body bytes written to clients, by cache outcome.
+# TYPE edgecache_response_bytes_total counter
+edgecache_response_bytes_total{outcome="hit"} 32768
+edgecache_response_bytes_total{outcome="miss"} 16384
+edgecache_response_bytes_total{outcome="stale"} 16384
+edgecache_response_bytes_total{outcome="revalidated"} 0
+edgecache_response_bytes_total{outcome="bypass"} 19
+edgecache_response_bytes_total{outcome="error"} 1
+# HELP edgecache_request_duration_seconds End-to-end client request duration in seconds.
+# TYPE edgecache_request_duration_seconds histogram
+edgecache_request_duration_seconds_bucket{le="0.0005"} 3
+edgecache_request_duration_seconds_bucket{le="0.001"} 4
+edgecache_request_duration_seconds_bucket{le="0.0025"} 4
+edgecache_request_duration_seconds_bucket{le="0.005"} 4
+edgecache_request_duration_seconds_bucket{le="0.01"} 4
+edgecache_request_duration_seconds_bucket{le="0.025"} 4
+edgecache_request_duration_seconds_bucket{le="0.05"} 5
+edgecache_request_duration_seconds_bucket{le="0.1"} 7
+edgecache_request_duration_seconds_bucket{le="0.25"} 7
+edgecache_request_duration_seconds_bucket{le="0.5"} 7
+edgecache_request_duration_seconds_bucket{le="1"} 7
+edgecache_request_duration_seconds_bucket{le="2.5"} 7
+edgecache_request_duration_seconds_bucket{le="5"} 7
+edgecache_request_duration_seconds_bucket{le="10"} 7
+edgecache_request_duration_seconds_bucket{le="+Inf"} 8
+edgecache_request_duration_seconds_sum 60.15815
+edgecache_request_duration_seconds_count 8
+# HELP edgecache_ttfb_seconds Time to first byte written to the client in seconds, by cache outcome.
+# TYPE edgecache_ttfb_seconds histogram
+edgecache_ttfb_seconds_bucket{outcome="hit",le="0.0005"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="0.001"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="0.0025"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="0.005"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="0.01"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="0.025"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="0.05"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="0.1"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="0.25"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="0.5"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="1"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="2.5"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="5"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="10"} 2
+edgecache_ttfb_seconds_bucket{outcome="hit",le="+Inf"} 2
+edgecache_ttfb_seconds_sum{outcome="hit"} 0.0002
+edgecache_ttfb_seconds_count{outcome="hit"} 2
+edgecache_ttfb_seconds_bucket{outcome="miss",le="0.0005"} 0
+edgecache_ttfb_seconds_bucket{outcome="miss",le="0.001"} 0
+edgecache_ttfb_seconds_bucket{outcome="miss",le="0.0025"} 0
+edgecache_ttfb_seconds_bucket{outcome="miss",le="0.005"} 0
+edgecache_ttfb_seconds_bucket{outcome="miss",le="0.01"} 0
+edgecache_ttfb_seconds_bucket{outcome="miss",le="0.025"} 0
+edgecache_ttfb_seconds_bucket{outcome="miss",le="0.05"} 0
+edgecache_ttfb_seconds_bucket{outcome="miss",le="0.1"} 1
+edgecache_ttfb_seconds_bucket{outcome="miss",le="0.25"} 1
+edgecache_ttfb_seconds_bucket{outcome="miss",le="0.5"} 1
+edgecache_ttfb_seconds_bucket{outcome="miss",le="1"} 1
+edgecache_ttfb_seconds_bucket{outcome="miss",le="2.5"} 1
+edgecache_ttfb_seconds_bucket{outcome="miss",le="5"} 1
+edgecache_ttfb_seconds_bucket{outcome="miss",le="10"} 1
+edgecache_ttfb_seconds_bucket{outcome="miss",le="+Inf"} 1
+edgecache_ttfb_seconds_sum{outcome="miss"} 0.052
+edgecache_ttfb_seconds_count{outcome="miss"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="0.0005"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="0.001"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="0.0025"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="0.005"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="0.01"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="0.025"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="0.05"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="0.1"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="0.25"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="0.5"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="1"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="2.5"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="5"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="10"} 1
+edgecache_ttfb_seconds_bucket{outcome="stale",le="+Inf"} 1
+edgecache_ttfb_seconds_sum{outcome="stale"} 9e-05
+edgecache_ttfb_seconds_count{outcome="stale"} 1
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="0.0005"} 0
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="0.001"} 0
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="0.0025"} 0
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="0.005"} 0
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="0.01"} 0
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="0.025"} 0
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="0.05"} 1
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="0.1"} 1
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="0.25"} 1
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="0.5"} 1
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="1"} 1
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="2.5"} 1
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="5"} 1
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="10"} 1
+edgecache_ttfb_seconds_bucket{outcome="revalidated",le="+Inf"} 1
+edgecache_ttfb_seconds_sum{outcome="revalidated"} 0.048
+edgecache_ttfb_seconds_count{outcome="revalidated"} 1
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="0.0005"} 0
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="0.001"} 0
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="0.0025"} 0
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="0.005"} 0
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="0.01"} 0
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="0.025"} 0
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="0.05"} 0
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="0.1"} 1
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="0.25"} 1
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="0.5"} 1
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="1"} 1
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="2.5"} 1
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="5"} 1
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="10"} 1
+edgecache_ttfb_seconds_bucket{outcome="bypass",le="+Inf"} 1
+edgecache_ttfb_seconds_sum{outcome="bypass"} 0.051
+edgecache_ttfb_seconds_count{outcome="bypass"} 1
+edgecache_ttfb_seconds_bucket{outcome="error",le="0.0005"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="0.001"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="0.0025"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="0.005"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="0.01"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="0.025"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="0.05"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="0.1"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="0.25"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="0.5"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="1"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="2.5"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="5"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="10"} 0
+edgecache_ttfb_seconds_bucket{outcome="error",le="+Inf"} 0
+edgecache_ttfb_seconds_sum{outcome="error"} 0
+edgecache_ttfb_seconds_count{outcome="error"} 0
+# HELP edgecache_origin_requests_total Upstream exchanges, by status class (error = transport failure).
+# TYPE edgecache_origin_requests_total counter
+edgecache_origin_requests_total{status_class="1xx"} 0
+edgecache_origin_requests_total{status_class="2xx"} 1
+edgecache_origin_requests_total{status_class="3xx"} 1
+edgecache_origin_requests_total{status_class="4xx"} 0
+edgecache_origin_requests_total{status_class="5xx"} 1
+edgecache_origin_requests_total{status_class="error"} 1
+edgecache_origin_requests_total{status_class="other"} 0
+# HELP edgecache_origin_duration_seconds Upstream exchange duration in seconds (headers received).
+# TYPE edgecache_origin_duration_seconds histogram
+edgecache_origin_duration_seconds_bucket{le="0.005"} 0
+edgecache_origin_duration_seconds_bucket{le="0.01"} 0
+edgecache_origin_duration_seconds_bucket{le="0.025"} 0
+edgecache_origin_duration_seconds_bucket{le="0.05"} 2
+edgecache_origin_duration_seconds_bucket{le="0.1"} 3
+edgecache_origin_duration_seconds_bucket{le="0.25"} 3
+edgecache_origin_duration_seconds_bucket{le="0.5"} 3
+edgecache_origin_duration_seconds_bucket{le="1"} 3
+edgecache_origin_duration_seconds_bucket{le="2.5"} 3
+edgecache_origin_duration_seconds_bucket{le="5"} 3
+edgecache_origin_duration_seconds_bucket{le="10"} 4
+edgecache_origin_duration_seconds_bucket{le="30"} 4
+edgecache_origin_duration_seconds_bucket{le="+Inf"} 4
+edgecache_origin_duration_seconds_sum 10.128
+edgecache_origin_duration_seconds_count 4
+# HELP edgecache_collapsed_total Requests that waited on another request's origin fetch (collapse waiters).
+# TYPE edgecache_collapsed_total counter
+edgecache_collapsed_total 3
+# HELP edgecache_store_bytes Bytes resident in the tier.
+# TYPE edgecache_store_bytes gauge
+edgecache_store_bytes{tier="disk"} 1073741824
+edgecache_store_bytes{tier="mem"} 1048576
+# HELP edgecache_store_entries Entries resident in the tier.
+# TYPE edgecache_store_entries gauge
+edgecache_store_entries{tier="disk"} 65536
+edgecache_store_entries{tier="mem"} 64
+# HELP edgecache_store_capacity_bytes Byte budget of the tier.
+# TYPE edgecache_store_capacity_bytes gauge
+edgecache_store_capacity_bytes{tier="disk"} 5368709120
+edgecache_store_capacity_bytes{tier="mem"} 536870912
+# HELP edgecache_evictions_total Entries evicted by the tier's byte budget.
+# TYPE edgecache_evictions_total counter
+edgecache_evictions_total{tier="disk"} 12
+edgecache_evictions_total{tier="mem"} 3
+# HELP edgecache_purges_total Entries removed by purge, by selector kind.
+# TYPE edgecache_purges_total counter
+edgecache_purges_total{kind="url"} 2
+edgecache_purges_total{kind="prefix"} 0
+edgecache_purges_total{kind="tag"} 40
+edgecache_purges_total{kind="other"} 1
+# HELP edgecache_variant_evictions_total Vary variants dropped by the per-key variant cap.
+# TYPE edgecache_variant_evictions_total counter
+edgecache_variant_evictions_total 2
+# HELP edgecache_build_info Build metadata; always 1.
+# TYPE edgecache_build_info gauge
+edgecache_build_info{go_version="go1.99",version="v0.0.0-test"} 1
