@@ -35,3 +35,4 @@ results/**
 *.pprof
 *.pgo
 !cmd/edgecache/default.pgo
+.task/
