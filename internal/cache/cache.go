@@ -342,6 +342,12 @@ func (c *Cache) janitor(ctx context.Context) {
 // refresh aborts. Teardown calls it when the proxy drain runs out of time.
 func (c *Cache) Stop() { c.stop() }
 
+// InFlight reports collapse leaders currently fetching (for /admin/stats).
+func (c *Cache) InFlight() int { return c.group.InFlight() }
+
+// TagIndexLen reports how many keys the surrogate-key index holds (for /admin/stats).
+func (c *Cache) TagIndexLen() int { return c.tags.Len() }
+
 // Drain waits for in-flight background revalidations and collapse leaders to
 // finish or ctx to end; on ctx ending it cancels them and returns ctx.Err().
 func (c *Cache) Drain(ctx context.Context) error {

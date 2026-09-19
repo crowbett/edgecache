@@ -5,6 +5,7 @@ vars:
   APP: edgecache
   MAIN: ./cmd/edgecache
   BIN: bin/{{.APP}}{{exeExt}}
+  ORIGIN_BIN: bin/slow-origin{{exeExt}}
   IMAGE: '{{.APP}}:local'
   VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo dev
@@ -25,35 +26,52 @@ tasks:
       - go mod verify
 
   build:
-    desc: Build the binary into bin/
+    desc: Build edgecache and slow-origin into bin/ (static, -trimpath, version from git)
     cmds:
       - go build -trimpath -ldflags="{{.LDFLAGS}}" -o {{.BIN}} {{.MAIN}}
+      - go build -trimpath -ldflags="{{.LDFLAGS}}" -o {{.ORIGIN_BIN}} ./cmd/slow-origin
     sources:
       - "**/*.go"
       - go.mod
       - go.sum
     generates:
       - "{{.BIN}}"
+      - "{{.ORIGIN_BIN}}"
 
   run:
-    desc: Run the cache on EDGECACHE_ADDR (127.0.0.1:8081) in front of EDGECACHE_ORIGIN (required, e.g. http://127.0.0.1:8082)
+    desc: Run the cache on EDGECACHE_ADDR (127.0.0.1:8081, admin 127.0.0.1:9101) in front of EDGECACHE_ORIGIN (default http://127.0.0.1:8082, see `task origin`)
+    env:
+      EDGECACHE_ORIGIN: '{{.EDGECACHE_ORIGIN | default "http://127.0.0.1:8082"}}'
+      LOG_FORMAT: '{{.LOG_FORMAT | default "text"}}'
     cmds:
-      - go run {{.MAIN}}
+      - go run -ldflags="-X main.version={{.VERSION}}" {{.MAIN}}
 
   origin:
-    desc: Run the slow benchmark origin on ORIGIN_ADDR (:8082)
+    desc: Run the slow benchmark origin on ORIGIN_ADDR (127.0.0.1:8082; ORIGIN_LATENCY/_JITTER/_BODY_BYTES/_CACHE_CONTROL/_KEYSPACE)
+    env:
+      ORIGIN_ADDR: '{{.ORIGIN_ADDR | default "127.0.0.1:8082"}}'
     cmds:
       - go run ./cmd/slow-origin
 
   bench:
-    desc: Go microbenchmarks for the hot path (-benchmem)
+    desc: Hot-path microbenchmarks, -count=10 -benchmem, saved to .bench/baseline.txt (scripts/bench.ps1)
     cmds:
-      - go test -run '^$' -bench . -benchmem ./internal/...
+      - pwsh -NoProfile -File scripts/bench.ps1 -Save baseline
+
+  bench:compare:
+    desc: Run the microbenchmarks and benchstat them against .bench/baseline.txt
+    cmds:
+      - pwsh -NoProfile -File scripts/bench.ps1 -Compare baseline
 
   load:
-    desc: oha load run against slow-origin (scripts/cache.ps1, written at step 12)
+    desc: oha hit-ratio / latency run against slow-origin (cold, warm, no-cache, origin) -> results/<ts>/summary.md
     cmds:
-      - '{{if eq OS "windows"}}pwsh -NoProfile -Command "if (Test-Path scripts/cache.ps1) { pwsh -NoProfile -File scripts/cache.ps1 } else { Write-Host ''see scripts/cache.ps1 (not written yet)'' }"{{else}}echo "see scripts/cache.ps1"{{end}}'
+      - pwsh -NoProfile -File scripts/cache.ps1
+
+  pgo:
+    desc: Collect cmd/edgecache/default.pgo under warm load and A/B/A/B it -> results/pgo/<ts>/summary.md
+    cmds:
+      - pwsh -NoProfile -File scripts/pgo.ps1
 
   dev:
     desc: Hot reload with air (go install github.com/air-verse/air@latest)
