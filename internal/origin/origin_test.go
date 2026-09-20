@@ -294,16 +294,18 @@ func TestDoHeaderTimeout(t *testing.T) {
 
 func TestDoTotalBudgetCoversBody(t *testing.T) {
 	t.Parallel()
+	// The handler never ends the body on its own; only the client's Total
+	// budget (via the request context) can. Total is generous because Do must
+	// return the headers inside it: at 100 ms the test flaked under -race on
+	// a loaded 2-vCPU runner (Do itself overran the budget), so 1 s here.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
-		select {
-		case <-r.Context().Done():
-		case <-time.After(2 * time.Second):
-		}
+		<-r.Context().Done()
 	}))
 	defer srv.Close()
-	o := newOrigin(t, srv.URL, func(c *Config) { c.Total = 100 * time.Millisecond })
+	o := newOrigin(t, srv.URL, func(c *Config) { c.Total = time.Second })
+	start := time.Now()
 	resp, err := o.Do(context.Background(), httptest.NewRequest(http.MethodGet, "http://edge/", http.NoBody))
 	if err != nil {
 		t.Fatal(err)
@@ -312,6 +314,12 @@ func TestDoTotalBudgetCoversBody(t *testing.T) {
 	_, err = io.ReadAll(resp.Body)
 	if err == nil {
 		t.Fatal("body read should fail once Total elapses")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline") {
+		t.Fatalf("err = %v, want the Total deadline", err)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatalf("body read took %s; Total did not bound it", time.Since(start))
 	}
 }
 
