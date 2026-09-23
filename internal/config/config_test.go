@@ -59,6 +59,7 @@ func TestLoadDefaults(t *testing.T) {
 		{"LogFormat", cfg.LogFormat, "json"},
 		{"OTELEnabled", cfg.OTELEnabled, false},
 		{"TrustedProxies", len(cfg.TrustedProxies), 0},
+		{"RangeFill", cfg.RangeFill, true},
 		{"OTELEndpoint", cfg.OTELEndpoint, "http://localhost:4317"},
 		{"ServiceName", cfg.ServiceName, "edgecache"},
 		{"DiskEnabled", cfg.DiskEnabled(), false},
@@ -178,10 +179,13 @@ func TestLoadTable(t *testing.T) {
 		{name: "bad tag header", env: map[string]string{"EDGECACHE_TAG_HEADERS": "Cache Tag"}, wantErr: []string{"not a header name"}},
 		{name: "non-loopback admin needs token", env: map[string]string{"EDGECACHE_ADMIN_ADDR": ":9101"}, wantErr: []string{"EDGECACHE_PURGE_TOKEN is required"}},
 		{name: "bad origin host override", env: map[string]string{"EDGECACHE_ORIGIN_HOST": "a b"}, wantErr: []string{"EDGECACHE_ORIGIN_HOST"}},
-		{name: "trusted proxies parse", env: map[string]string{"EDGECACHE_TRUSTED_PROXIES": "10.0.0.0/8, 127.0.0.1"}, check: func(t *testing.T, c Config) {
+		{name: "trusted proxies parse", env: map[string]string{"EDGECACHE_TRUSTED_PROXIES": "10.0.0.0/8, 127.0.0.1", "EDGECACHE_RANGE_FILL": "false"}, check: func(t *testing.T, c Config) {
 			t.Helper()
 			if len(c.TrustedProxies) != 2 || c.TrustedProxies[0].String() != "10.0.0.0/8" || c.TrustedProxies[1].String() != "127.0.0.1/32" {
 				t.Errorf("TrustedProxies = %v", c.TrustedProxies)
+			}
+			if c.RangeFill {
+				t.Error("RangeFill should be false")
 			}
 		}},
 		{name: "bad trusted proxy", env: map[string]string{"EDGECACHE_TRUSTED_PROXIES": "10.0.0.0/8,proxy.local"}, wantErr: []string{"EDGECACHE_TRUSTED_PROXIES", "proxy.local"}},

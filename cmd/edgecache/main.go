@@ -129,6 +129,7 @@ func run() error {
 		CollapseLeadTimeout: cfg.CollapseLeadTimeout,
 		PurgeVerbose:        cfg.PurgeVerbose,
 		TrustedProxies:      trusted,
+		RangeFill:           cfg.RangeFill,
 		Debug:               cfg.LogLevel <= slog.LevelDebug, // X-Cache-Key on responses
 	}, st, org, reg, logger)
 	if err != nil {
@@ -336,6 +337,7 @@ func configSummary(cfg config.Config) map[string]any {
 		"tag_headers":           cfg.TagHeaders,
 		"janitor_interval":      cfg.JanitorInterval.String(),
 		"collapse_lead_timeout": cfg.CollapseLeadTimeout.String(),
+		"range_fill":            cfg.RangeFill,
 	}
 }
 

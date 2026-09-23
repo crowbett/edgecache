@@ -107,6 +107,9 @@ type Config struct {
 	// Forwarded headers are honoured (EDGECACHE_TRUSTED_PROXIES, comma-separated
 	// CIDRs or IPs); empty trusts nobody.
 	TrustedProxies []netip.Prefix
+	// RangeFill starts a background full GET when a Range request misses, so the
+	// next range is cut from a stored 200 (EDGECACHE_RANGE_FILL, default true).
+	RangeFill bool
 }
 
 // Load reads configuration from the environment, applying the documented
@@ -136,6 +139,7 @@ func Load() (Config, error) {
 		HeuristicMax:        DefaultHeuristicMax,
 		OrphanFetch:         true,
 		OrphanMaxBytes:      DefaultOrphanMaxBytes,
+		RangeFill:           true,
 		PurgeToken:          os.Getenv("EDGECACHE_PURGE_TOKEN"),
 		TagHeaders:          headerList(getenv("EDGECACHE_TAG_HEADERS", DefaultTagHeaders)),
 		JanitorInterval:     DefaultJanitorInterval,
@@ -202,6 +206,7 @@ func Load() (Config, error) {
 		{"EDGECACHE_CACHE_AUTHORIZATION", &cfg.CacheAuthorization},
 		{"EDGECACHE_ORPHAN_FETCH", &cfg.OrphanFetch},
 		{"EDGECACHE_PURGE_VERBOSE", &cfg.PurgeVerbose},
+		{"EDGECACHE_RANGE_FILL", &cfg.RangeFill},
 	} {
 		var err error
 		if *b.dst, err = getBool(b.key, *b.dst); err != nil {

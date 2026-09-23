@@ -64,9 +64,9 @@ func (c *Cache) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
-		status, hdr := rq.forward(OutcomeBypass, rfc9111.ReasonUnsafeMethod)
-		if status > 0 && status < http.StatusBadRequest {
-			rq.invalidateFor(hdr)
+		up := rq.forward(OutcomeBypass, rfc9111.ReasonUnsafeMethod)
+		if up.status > 0 && up.status < http.StatusBadRequest {
+			rq.invalidateFor(up.header)
 		}
 		return
 	default:
@@ -88,13 +88,21 @@ func (c *Cache) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		rq.gatewayTimeout(rfc9111.ReasonOnlyIfCached)
 		return
 	}
-	if r.Header.Get("Range") != "" {
-		rq.forward(OutcomeBypass, rfc9111.ReasonRange)
+	if r.Method == http.MethodHead {
+		// A HEAD miss is forwarded as is and stores nothing: there is no body,
+		// and a stored GET is the only thing that may answer a HEAD (RFC 9111
+		// §4). Range is undefined for HEAD and ignored (RFC 9110 §14.2).
+		rq.forward(OutcomeMiss, rfc9111.ReasonNone)
 		return
 	}
-	if r.Method == http.MethodHead {
-		// A HEAD miss is forwarded as is: there is no body to store.
-		rq.forward(OutcomeMiss, rfc9111.ReasonNone)
+	if r.Header.Get("Range") != "" {
+		// A range miss passes through uncached (a 206 is never stored: RFC 9111
+		// §3.4 combining is not implemented); a background full GET then fills
+		// the entry the next range is cut from.
+		up := rq.forward(OutcomeBypass, rfc9111.ReasonRange)
+		if c.cfg.RangeFill && c.worthFilling(rq, up) {
+			c.startFill(rq)
+		}
 		return
 	}
 	rq.miss(nil)
@@ -154,13 +162,24 @@ func (rq *request) serveStored(e *store.Entry, key cachekey.Key) {
 		c.startBackground(rq, key, meta)
 		e.Release()
 	case rfc9111.Revalidate, rfc9111.Stale:
-		if rq.r.Header.Get("Range") != "" || rq.r.Method == http.MethodHead {
-			// Neither path can produce a full body to store; go to the origin uncached.
+		switch {
+		case rq.r.Method == http.MethodHead:
+			// The HEAD goes upstream; a 200 then updates or invalidates the
+			// stored GET (RFC 9111 §4.3.5).
+			e.Release()
+			up := rq.forward(OutcomeBypass, d.Reason)
+			if up.status == http.StatusOK {
+				c.freshenFromHead(rq, key, meta, up)
+			}
+		case rq.r.Header.Get("Range") != "":
+			// The range passes through; the entry is refreshed in the
+			// background like stale-while-revalidate, so the next range hits.
 			e.Release()
 			rq.forward(OutcomeBypass, d.Reason)
-			return
+			c.startBackground(rq, key, meta)
+		default:
+			rq.miss(&stale{e: e, key: key, meta: meta, cond: d.Action == rfc9111.Revalidate})
 		}
-		rq.miss(&stale{e: e, key: key, meta: meta, cond: d.Action == rfc9111.Revalidate})
 	case rfc9111.Bypass:
 		e.Release()
 		rq.forward(OutcomeBypass, d.Reason)
@@ -290,13 +309,7 @@ func (c *Cache) startBackground(rq *request, key cachekey.Key, meta store.Meta) 
 	if !ok {
 		return
 	}
-	up := rq.r.Clone(c.root)
-	up.Body, up.ContentLength = http.NoBody, 0
-	up.Method = http.MethodGet
-	for _, h := range []string{"Cache-Control", "Pragma", "If-None-Match", "If-Modified-Since", "If-Match", "If-Unmodified-Since", "Range"} {
-		up.Header.Del(h)
-	}
-	bgrq := &request{c: c, r: up, u: rq.u, k0: rq.k0, variants: rq.variants, start: c.now()}
+	bgrq := c.backgroundRequest(rq)
 	c.bg.Add(1)
 	go func() {
 		defer c.bg.Done()
@@ -312,9 +325,22 @@ func (c *Cache) startBackground(rq *request, key cachekey.Key, meta store.Meta) 
 	}()
 }
 
+// backgroundRequest is a clientless plain GET for rq's URL on the root
+// context: no body, no client conditionals, Cache-Control or Range, so the
+// origin answers with the full representation the store can keep.
+func (c *Cache) backgroundRequest(rq *request) *request {
+	up := rq.r.Clone(c.root)
+	up.Body, up.ContentLength = http.NoBody, 0
+	up.Method = http.MethodGet
+	for _, h := range []string{"Cache-Control", "Pragma", "If-None-Match", "If-Modified-Since", "If-Match", "If-Unmodified-Since", "If-Range", "Range"} {
+		up.Header.Del(h)
+	}
+	return &request{c: c, r: up, u: rq.u, k0: rq.k0, variants: rq.variants, start: c.now()}
+}
+
 // serveEntry writes a stored response: its headers, Age, X-Cache, then the
 // body from e.Open() (none for HEAD). A client conditional that matches
-// answers 304; a Range on a seekable body goes through http.ServeContent.
+// answers 304; a GET with Range on a stored 200 is answered by serveRange.
 func (rq *request) serveEntry(meta store.Meta, e *store.Entry, outcome string, age time.Duration) {
 	c, w, r := rq.c, rq.w, rq.r
 	rq.outcome, rq.age = outcome, age
@@ -342,16 +368,9 @@ func (rq *request) serveEntry(meta store.Meta, e *store.Entry, outcome string, a
 	if withBody {
 		h.Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	}
-	if withBody && meta.Status == http.StatusOK && r.Header.Get("Range") != "" {
-		if rc, err := e.Open(); err == nil {
-			if rs, ok := rc.(io.ReadSeeker); ok {
-				defer rc.Close()
-				h.Del("Content-Length")
-				http.ServeContent(w, r, "", meta.LastModified, rs)
-				return
-			}
-			_ = rc.Close()
-		}
+	if withBody && meta.Status == http.StatusOK && r.Method == http.MethodGet && r.Header.Get("Range") != "" &&
+		rq.serveRange(meta, e) {
+		return
 	}
 	w.WriteHeader(meta.Status)
 	if !withBody || r.Method == http.MethodHead || meta.Size == 0 {
@@ -370,20 +389,29 @@ func (rq *request) serveEntry(meta store.Meta, e *store.Entry, outcome string, a
 	}
 }
 
+// upstream is what forward saw of the origin's answer: status (0 on a
+// transport failure), hop-by-hop-stripped header, and the request/response
+// times of the exchange (RFC 9111 §4.2.3 request_time / response_time).
+type upstream struct {
+	status            int
+	header            http.Header
+	reqTime, respTime time.Time
+}
+
 // forward passes the request to the origin uncached and streams the answer
-// back with X-Cache set to label; it returns the origin status (0 on failure)
-// and headers.
-func (rq *request) forward(label string, reason rfc9111.Reason) (int, http.Header) {
+// back with X-Cache set to label.
+func (rq *request) forward(label string, reason rfc9111.Reason) upstream {
 	c, w, r := rq.c, rq.w, rq.r
 	rq.reason = reason
 	up := r.Clone(r.Context())
 	t0 := c.now()
 	resp, err := c.fetch.Do(r.Context(), up)
-	d := c.now().Sub(t0)
+	t1 := c.now()
+	d := t1.Sub(t0)
 	if err != nil {
 		c.rec.Origin(0, d, err)
 		rq.gatewayError(err)
-		return 0, nil
+		return upstream{}
 	}
 	c.rec.Origin(resp.StatusCode, d, nil)
 	defer resp.Body.Close()
@@ -398,15 +426,16 @@ func (rq *request) forward(label string, reason rfc9111.Reason) (int, http.Heade
 	}
 	rq.outcome = label
 	w.WriteHeader(resp.StatusCode)
+	res := upstream{status: resp.StatusCode, header: hdr, reqTime: t0, respTime: t1}
 	if r.Method == http.MethodHead || !bodyAllowed(resp.StatusCode) {
-		return resp.StatusCode, hdr
+		return res
 	}
 	buf := c.getBuf()
 	defer c.putBuf(buf)
 	if _, err := io.CopyBuffer(struct{ io.Writer }{w}, resp.Body, *buf); err != nil {
 		c.log.Debug("cache: forward copy", slog.Any("err", err))
 	}
-	return resp.StatusCode, hdr
+	return res
 }
 
 // invalidateFor drops the request URL's entries after a successful unsafe

@@ -53,6 +53,7 @@ type fakeStore struct {
 	held        atomic.Int32
 	maxVariants int
 	writerErr   error
+	plainBodies bool // Open returns a reader without ReadAt/Seek
 }
 
 func newFakeStore() *fakeStore {
@@ -70,8 +71,14 @@ func (readSeekCloser) Close() error { return nil }
 func (s *fakeStore) entry(k cachekey.Key, e *fakeEntry) *store.Entry {
 	s.held.Add(1)
 	body := e.body
+	plain := s.plainBodies
 	return store.NewEntry(k, e.meta, store.TierMem,
-		func() (io.ReadCloser, error) { return readSeekCloser{bytes.NewReader(body)}, nil },
+		func() (io.ReadCloser, error) {
+			if plain {
+				return io.NopCloser(struct{ io.Reader }{bytes.NewReader(body)}), nil
+			}
+			return readSeekCloser{bytes.NewReader(body)}, nil
+		},
 		func() { s.held.Add(-1) })
 }
 

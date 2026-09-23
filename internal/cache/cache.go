@@ -116,6 +116,9 @@ type Config struct {
 	// TrustedProxies are the peers whose X-Forwarded-Proto is honoured when
 	// the request URL (and so the cache key) is rebuilt; zero value: nobody.
 	TrustedProxies trustproxy.List
+	// RangeFill starts one background full GET when a Range request misses, so
+	// later ranges are cut from a stored 200 (206s themselves are never stored).
+	RangeFill bool
 	// Debug adds X-Cache-Key to responses.
 	Debug bool
 	// Now is the engine's clock; nil means time.Now. Tests inject a fixed one.

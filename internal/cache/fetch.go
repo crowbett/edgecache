@@ -176,12 +176,29 @@ func (c *Cache) metaFor(rq *request, res rfc9111.Resp, sd rfc9111.RespDirectives
 // revalidated handles a 304 to our own conditional request: merge the headers
 // (§4.3.4), refresh the times and lifetime, UpdateMeta, serve REVALIDATED.
 func (c *Cache) revalidated(ctx context.Context, rq *request, st *stale, res rfc9111.Resp) fetchResult {
-	merged := rfc9111.Merge304(st.meta.Header, res.Header)
+	nm := c.refreshedMeta(st.meta, res)
+	if err := c.store.UpdateMeta(ctx, st.key, nm); err != nil {
+		c.log.Warn("cache: update meta", slog.String("key", st.key.String()), slog.Any("err", err))
+	}
+	c.tags.Add(st.key, nm.URL, nm.Tags)
+	if rq.w != nil {
+		rq.key, rq.hasKey = st.key, true
+		rq.serveEntry(nm, st.e, OutcomeRevalidated, rfc9111.Age(nm.Resp, c.now()))
+	}
+	return fetchResult{stored: true, key: st.key, vary: nm.Vary, status: http.StatusNotModified}
+}
+
+// refreshedMeta is stored updated by the header-only response res (a 304 to
+// our conditional, or a matching 200 to a HEAD): fields merged per §3.2 /
+// §4.3.4, request/response times and lifetime recomputed, validators and tags
+// re-read. Status, body size and Vary are the stored ones.
+func (c *Cache) refreshedMeta(stored store.Meta, res rfc9111.Resp) store.Meta {
+	merged := rfc9111.Merge304(stored.Header, res.Header)
 	sd := rfc9111.ParseResponse(merged)
 	merged = rfc9111.StorableHeader(merged, sd, res.ResponseTime)
-	nm := st.meta
+	nm := stored
 	nm.Resp = rfc9111.Resp{
-		Status:       st.meta.Status,
+		Status:       stored.Status,
 		Header:       merged,
 		RequestTime:  res.RequestTime,
 		ResponseTime: res.ResponseTime,
@@ -192,15 +209,7 @@ func (c *Cache) revalidated(ctx context.Context, rq *request, st *stale, res rfc
 	if lm, ok := rfc9111.ParseDate(merged.Get("Last-Modified"), res.ResponseTime); ok {
 		nm.LastModified = lm
 	}
-	if err := c.store.UpdateMeta(ctx, st.key, nm); err != nil {
-		c.log.Warn("cache: update meta", slog.String("key", st.key.String()), slog.Any("err", err))
-	}
-	c.tags.Add(st.key, nm.URL, nm.Tags)
-	if rq.w != nil {
-		rq.key, rq.hasKey = st.key, true
-		rq.serveEntry(nm, st.e, OutcomeRevalidated, rfc9111.Age(nm.Resp, c.now()))
-	}
-	return fetchResult{stored: true, key: st.key, vary: nm.Vary, status: http.StatusNotModified}
+	return nm
 }
 
 // writeUpstream copies an origin response's headers to the client with the
@@ -267,7 +276,9 @@ func (c *Cache) tee(body io.Reader, rq *request, wr store.Writer) (int64, store.
 				if wr == nil {
 					return total, nil, nil
 				}
-				if !c.cfg.OrphanFetch || (c.cfg.OrphanMaxBytes > 0 && total > c.cfg.OrphanMaxBytes) {
+				// The orphan budget is for a client that left. A background
+				// refresh or range fill never had one; MaxObjectBytes bounds it.
+				if rq.w != nil && (!c.cfg.OrphanFetch || (c.cfg.OrphanMaxBytes > 0 && total > c.cfg.OrphanMaxBytes)) {
 					_ = wr.Abort()
 					return total, nil, nil
 				}
