@@ -37,7 +37,8 @@ loopback :9101 admin listener (full template stack incl. Timeout)
 
 | Area | Implemented | v1 limits |
 |---|---|---|
-| Methods (§4) | GET/HEAD cached; HEAD served from a stored GET; POST/PUT/PATCH/DELETE invalidate the primary key on a non-error response | POST responses are never stored |
+| Methods (§4) | GET/HEAD cached; HEAD served from a stored GET; a HEAD miss is forwarded and stores nothing; POST/PUT/PATCH/DELETE invalidate the primary key on a non-error response | POST responses are never stored |
+| HEAD freshening (§4.3.5) | a HEAD for a stale entry goes upstream; a 200 whose `ETag` / `Last-Modified` (and `Content-Length`, if sent) match the stored GET updates its headers and restarts its freshness like a 304; a mismatch or a HEAD with no validator marks it stale (lifetime 0); a HEAD saying `no-store` / `private` drops it | |
 | Storable (§3) | status in {200,203,204,300,301,308,404,405,410,414,451}; `no-store` either side, `private`, `Vary: *` reject; §3.5 `Authorization` rule (`EDGECACHE_CACHE_AUTHORIZATION` overrides) | |
 | Freshness (§4.2) | `s-maxage` > `max-age` > `Expires - Date` > heuristic (`0.1 x (Date - Last-Modified)`, capped 24 h, flagged) | |
 | Age (§4.2.3) | `apparent_age`, `response_delay`, `corrected_initial_age`, clamped at 0, recomputed per response | |
@@ -45,8 +46,9 @@ loopback :9101 admin listener (full template stack incl. Timeout)
 | Validation (§4.3) | `If-None-Match` (weak compare) / `If-Modified-Since` to the origin; 304 -> `Merge304` (replace, never drop) + `UpdateMeta`; a client's own conditional is answered from a fresh entry | |
 | Vary (§4.1) | normalised, recorded as variants under the primary key, `MAX_VARIANTS` LRU per key | `Vary: *` bypasses |
 | RFC 5861 | `stale-while-revalidate` (serve STALE, one background refresh per key), `stale-if-error` (stale answers a 5xx/transport error); both off under `must-revalidate` / `proxy-revalidate` | |
-| Range (§3.3) | a `Range` request passes through uncached; a stored full entry serves ranges via `http.ServeContent` | 206 responses are never stored; no stitching |
+| Range (9110 §14) | a stored full 200 answers `Range` itself: single range -> 206 + `Content-Range`, several -> `multipart/byteranges`, none satisfiable -> 416 `bytes */N`; `If-Range` (strong ETag or exact `Last-Modified`, §13.1.5) falls back to 200; malformed, non-`bytes`, > 64 ranges or ranges summing past the body are ignored (200, §14.2). A range **miss** passes through uncached, then one background plain GET (`EDGECACHE_RANGE_FILL`, deduped per key, collapsed with concurrent GET misses) fills the entry when the pass-through answer looks storable and its complete length fits `MAX_OBJECT_BYTES`; a range on a **stale** entry passes through and starts a background revalidation. HEAD ignores `Range`. Parser fuzzed 60 s (`FuzzParseRange`, 8.4 M execs) and the serving path 60 s (`FuzzServeRange`, 2.1 M execs) | 206 responses are never stored (no §3.4 combining); multi-range on a `Content-Encoding` body answers 200 |
 | Hop-by-hop (9110 §7.6.1) | stripped both ways plus `Connection`-listed tokens; `Via: 1.1 edgecache` | `Warning` is never emitted (obsolete) |
+| Forwarded fields | `X-Forwarded-Proto` picks the key's scheme and `X-Forwarded-For/-Proto/-Host` + `Forwarded` are passed upstream only from `EDGECACHE_TRUSTED_PROXIES` peers (default: nobody); from anyone else they are dropped and rebuilt from the connection, so a plain-HTTP client cannot plant entries under the `https` key | behind a TLS terminator, list it or every entry keys as `http` |
 
 Responses carry `X-Cache: HIT|MISS|STALE|REVALIDATED|BYPASS`, `Age`, `X-Cache-Reason` on bypass and
 `X-Cache-Key` when `LOG_LEVEL=debug`.
@@ -76,7 +78,10 @@ lands an entry. Proof from the smoke run: 20 concurrent cold `GET /obj/777` -> o
 
 - `PURGE <path>` on the proxy listener with `X-Purge-Token` (constant-time, length-independent compare;
   missing -> 401, wrong -> 403). Deletes every variant of the URL.
-- `POST /admin/purge {"url"|"prefix"|"tag"}` on the admin listener; exactly one selector. Prefix and
+- `POST /admin/purge {"url"|"prefix"|"tag"}` on the admin listener; exactly one selector. A prefix is
+  either an absolute URL prefix (`http://cdn.example/static/`, one scheme + host) or path-relative
+  (`/static/`): the proxy fronts one origin, so a path prefix matches that path under every host and
+  scheme the cache has stored, escape-normalised like the stored URLs (`/%7Euser/` = `/~user/`). Prefix and
   tag go through the in-memory tag index (`Cache-Tag` / `Surrogate-Key`, rebuilt from disk metas at boot,
   reconciled with the store's own evictions on every janitor tick so it never outgrows the store).
 - With a token configured both listeners require it; without one only loopback peers may purge.
@@ -102,6 +107,8 @@ Every key is validated at startup and all problems are reported at once (`errors
 | `EDGECACHE_ORPHAN_FETCH` / `EDGECACHE_ORPHAN_MAX_BYTES` | `true` / `8MiB` | finish a fetch after the client disconnects |
 | `EDGECACHE_PURGE_TOKEN` / `EDGECACHE_PURGE_VERBOSE` | `""` / `false` | purge credential; list purged keys |
 | `EDGECACHE_TAG_HEADERS` | `Cache-Tag,Surrogate-Key` | response headers read as surrogate keys |
+| `EDGECACHE_TRUSTED_PROXIES` | `""` (nobody) | comma-separated CIDRs / IPs whose `X-Forwarded-*` / `Forwarded` fields are honoured |
+| `EDGECACHE_RANGE_FILL` | `true` | a range miss starts one background full GET so the next range is a hit |
 | `EDGECACHE_JANITOR_INTERVAL` / `EDGECACHE_COLLAPSE_LEAD_TIMEOUT` | `30s` / `60s` | tombstone sweep + tag-index reconcile + gauge tick / leader budget |
 | `REQUEST_TIMEOUT` / `SHUTDOWN_TIMEOUT` | `60s` / `15s` | admin mux only / proxy drain budget (teardown stage 2) |
 | `SERVICE_NAME` `APP_ENV` `LOG_LEVEL` `LOG_FORMAT` | `edgecache` `dev` `info` `json` | `LOG_LEVEL=debug` adds `X-Cache-Key` |
@@ -146,19 +153,28 @@ Commands: `task load` (`scripts/cache.ps1`), `task pgo` (`scripts/pgo.ps1`), `ta
 
 ### Hit ratio and latency (`scripts/cache.ps1`)
 
-`results/20260919-085016/summary.md`, zipf(s=1) URL list over 1000 keys (`--urls-from-file`, 984 distinct):
+`results/20260922-181426/summary.md` (re-run after Q7 changed the handler; **loaded box**: other agents were
+building and testing in parallel, so absolute rps is lower than the 2026-09-19 run and is not comparable to it),
+zipf(s=1) URL list over 1000 keys (`--urls-from-file`, 984 distinct):
 
 | mode | rps | p50 ms | p90 ms | p99 ms | hit ratio | origin rps | success |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| cold | 57202 | 0.56 | 2.35 | 8.65 | 99.9% | 33 | 1.0000 |
-| warm | 48517 | 0.60 | 2.69 | 11.87 | 100.0% | 33 | 1.0000 |
-| no-cache | 1049 | 55.96 | 89.53 | 111.85 | 100.0% | 1047 | 1.0000 |
-| origin | 1267 | 50.56 | 58.54 | 60.42 | n/a | 1267 | 1.0000 |
+| cold | 39253 | 0.65 | 3.67 | 14.50 | 99.9% | 33 | 1.0000 |
+| warm | 36328 | 0.68 | 4.01 | 16.12 | 100.0% | 33 | 1.0000 |
+| no-cache | 1063 | 55.32 | 88.15 | 107.37 | 100.0% | 1063 | 1.0000 |
+| origin | 1265 | 50.59 | 58.57 | 60.50 | n/a | 1265 | 1.0000 |
 
-Outcome counts: cold 1,715,472 hit / 982 miss / 301 collapsed (zipf: the first request per key is the only
-miss); warm 984 revalidated (max-age=60 lapsed once during the run); no-cache 31,434 revalidated, 10 errors,
-10,991 collapsed (`no-cache` forces a conditional per request, so the proxy is origin-bound at ~1050 rps, the
+Outcome counts: cold 1,177,383 hit / 984 miss / 291 collapsed (zipf: the first request per key is the only
+miss); warm 983 revalidated (max-age=60 lapsed once during the run); no-cache 31,898 revalidated, 10 errors,
+11,116 collapsed (`no-cache` forces a conditional per request, so the proxy is origin-bound at ~1060 rps, the
 same ceiling as the origin control). Hit ratio counts hit + stale + revalidated as served from cache.
+
+**Q7 A/B** (`results/q7/20260922-180700/summary.md`, loaded box): before = `80898e9`, after = Q7, warm mode 15 s,
+6 interleaved ABAB rounds: median rps 30050 -> 29252 (-2.7 %), p50 0.80 -> 0.79 ms, p99 19.9 -> 21.7 ms, against a
+round-to-round spread of 37 % / 57 % (rps) and 82 % / 83 % (p99), so no regression outside the noise. The engine
+hit benchmark `BenchmarkHandlerHit` (real handler + memstore + metrics, 8 ABAB rounds, benchstat) is 6.95 -> 7.01 us,
+p=0.38, **25 allocs/op both sides**; `HitPath` stays 368 B / 4 allocs, p=0.57. Trusted-proxy checks run only when
+`X-Forwarded-Proto` is present and `trustproxy.List.Trusts` is 0-alloc (pinned by a test).
 
 ### PGO (`scripts/pgo.ps1`, warm mode, A/B/A/B interleaved)
 
@@ -202,6 +218,12 @@ The whole policy layer is allocation-free; a full hit costs ~1.6 us and 4 allocs
 the one remaining allocation hot spot (a `http.Header` clone per proxied response), the obvious next
 microbenchmark target.
 
+`HitPath` replays the hit steps by hand (key, Get, Evaluate, header copy, body copy); it does not go through
+`cache.Handler`. The handler-level number is `BenchmarkHandlerHit` in `internal/cache` (Q7): ~7 us and 25 allocs
+per 16 KiB hit on the loaded box (`results/q7/20260922-180700/summary.md`), the difference being the request
+struct, `absoluteURL`, variant lookup, the recorder and the slog call. None of the baseline rows above measure
+code Q7 changed, so `.bench/baseline.txt` stands.
+
 ## Teardown
 
 `cmd/edgecache/main.go` stops in six numbered stages with independent budgets, logged `teardown N/6`:
@@ -232,6 +254,7 @@ still get the value; `internal/diskstore` tests orphan sweep, corrupt meta and e
 
 - Path-prefix purge that matches on the canonical path rather than the absolute URL prefix.
 - Stream-sharing for collapse waiters (Varnish-style) if the cold p99 says the wait for commit dominates.
-- Store 206 responses and stitch ranges; today `Range` requests pass through uncached.
+- Store 206 responses and combine them (RFC 9111 §3.4); today a range miss passes through and a
+  background full GET fills the entry instead, which fetches the object twice on the first miss.
 - A `HEAD` miss is forwarded uncached (only a stored GET answers HEAD); fetching the GET on a HEAD miss
   would warm the entry for the next GET.

@@ -202,8 +202,10 @@ header. Responses carry `X-Cache: HIT|MISS|STALE|REVALIDATED|BYPASS`, `Age`, `X-
 - **swr / sie** (RFC 5861): inside `stale-while-revalidate` the stale entry is served at once as `STALE` while one
   background revalidation per key runs (`TryStart`); inside `stale-if-error` a stale entry answers a 5xx or transport
   error. Both disabled by `must-revalidate`/`proxy-revalidate`.
-- **Range** (§3.3): a `Range` request passes through uncached and is never stored; a stored *full* entry serves ranges
-  via `http.ServeContent`. Storing 206s and stitching is deferred.
+- **Range** (§3.3): a 206 is never stored (no §3.4 combining). A stored *full* 200 serves ranges itself
+  (`rfc9111.ParseRange` / `IfRange`, `cache.serveRange`: single-part 206, `multipart/byteranges`, 416); a range miss
+  passes through and, with `RANGE_FILL`, starts one background full GET (see Q7 below). *Deviation from v1*, which
+  handed ranges to `http.ServeContent` and bypassed every range miss.
 - **Caps**: `MAX_OBJECT_BYTES` (64 MiB) aborts the writer and degrades to passthrough mid-stream; memory admits
   objects <= `MEM_MAX_OBJECT_BYTES` (1 MiB); disk cap 5 GiB. `Warning` is never emitted.
 
@@ -257,6 +259,8 @@ that fits; `Writer` fans out into a memory buffer *and* the disk writer, droppin
 | `EDGECACHE_ORPHAN_FETCH` / `_ORPHAN_MAX_BYTES` | `true` / `8MiB` | finish a fetch after client disconnect |
 | `EDGECACHE_PURGE_TOKEN` / `_PURGE_VERBOSE` | `""` (PURGE off) / `false` | purge auth, key listing |
 | `EDGECACHE_TAG_HEADERS` | `Cache-Tag,Surrogate-Key` | response headers read as surrogate keys |
+| `EDGECACHE_TRUSTED_PROXIES` | `""` (nobody) | CIDRs/IPs whose `X-Forwarded-*` / `Forwarded` are honoured (Q7) |
+| `EDGECACHE_RANGE_FILL` | `true` | background full GET on a range miss (Q7) |
 | `EDGECACHE_JANITOR_INTERVAL` / `_COLLAPSE_LEAD_TIMEOUT` | `30s` / `60s` | tombstone+gauge tick / leader budget |
 | `REQUEST_TIMEOUT` / `SHUTDOWN_TIMEOUT` | `60s` / `15s` | admin mux only / stage-2 drain |
 | `LOG_LEVEL` `LOG_FORMAT` `OTEL_ENABLED` `OTEL_EXPORTER_OTLP_ENDPOINT` | template | unchanged |
@@ -446,6 +450,40 @@ P16 pass on this repo. Baseline before touching anything: `go build`, `go vet`, 
 - **CI**: green on ubuntu + windows + lint + vuln + docker after the push (see the run linked in the
   hardening report). `.gitattributes` keeps `metrics.golden` and `default.pgo` byte-exact on Windows.
 - **goreleaser**: not applicable (edgecache is a service, not one of the CLI repos).
-- **Open**: `X-Forwarded-Proto` from any client is trusted for the key scheme and forwarded upstream
-  (consistent between key and origin, so no cross-client poisoning, but a trusted-proxy list is a design
-  decision); `warned` (variant-cap warn-once) keeps one 32-byte entry per primary key that hit the cap.
+- **Open**: ~~`X-Forwarded-Proto` from any client is trusted~~ (closed by Q7, `EDGECACHE_TRUSTED_PROXIES`);
+  `warned` (variant-cap warn-once) keeps one 32-byte entry per primary key that hit the cap.
+
+## Q7: HEAD, Range, relative prefix purge, trusted proxies (2026-09-22)
+
+Integrator-level contract changes, made together with this section: `config.Config` gains `TrustedProxies
+[]netip.Prefix` and `RangeFill bool`; `cache.Config`, `origin.Config` and `server.Config` gain `TrustedProxies
+trustproxy.List` (+ `cache.Config.RangeFill`). New leaf package `internal/trustproxy` (stdlib only, imported by
+config, cache, origin, server). No frozen port type (`store.Meta`, `store.Writer`, `cache.Store/Fetcher/Recorder`,
+`rfc9111.Resp/Decision`) changed.
+
+- **HEAD** (RFC 9111 §4, §4.3.5): a HEAD miss is forwarded and stores nothing (as before, now pinned by a test that
+  the following GET is a full MISS). A HEAD on a stale entry goes upstream; a 200 runs `rfc9111.HeadMatches`: every
+  validator the HEAD carries must equal the stored one and a `Content-Length` must equal the stored size, and a HEAD
+  with no validator never matches (conservative reading of "matching values for any received validator"). Match ->
+  the same merge a 304 gets (`refreshedMeta`, shared with `revalidated`); mismatch -> lifetime 0 ("consider stale");
+  a HEAD the policy would not store (no-store, private) -> the entry is dropped.
+- **Range** (RFC 9110 §14, §13.1.5): parser in `rfc9111/ranges.go` (pure, fuzzed), serving in `cache/partial.go`.
+  Choice on a miss: **pass through + background fill**, not "fetch full and cut". The first client gets the origin's
+  own 206 at the origin's latency for that slice (for a large object, cutting from a full fetch would make it wait
+  for the bytes before its range); the fill is one deduped plain GET that goes through the collapse group, so a
+  concurrent plain GET miss waits for it instead of fetching again. It only starts when the pass-through answer is
+  one `Storable` would accept (with `Content-Range` removed) and its complete length fits `MAX_OBJECT_BYTES`, so
+  uncacheable range traffic never doubles origin load. Cost: the object crosses the origin link twice on the first
+  miss. 206s are not stored because §3.4 combining is not implemented. A range on a *stale* entry passes through and
+  starts the background revalidation (as swr does). Background fetches (swr refresh, fill) are no longer cut at
+  `ORPHAN_MAX_BYTES`: that budget is for a client that left, and a background job never had one (previously an
+  object over 8 MiB could never be refreshed in the background).
+- **Prefix purge**: a prefix starting with a single `/` is path-relative and matches that path-and-query prefix
+  under every scheme and host in the tag index. "Resolved against the configured origin" read literally would not
+  work: keys are built from the client's `Host` (e.g. `localhost:8081`), not `EDGECACHE_ORIGIN`, and every host a
+  client used maps to the one origin, so "every host" is the resolution that names the origin's resources. The
+  prefix is escape-normalised through `cachekey.Canonical`; a prefix with a query is used verbatim.
+- **Trusted proxies**: `X-Forwarded-Proto` changes the key's scheme only when `RemoteAddr` is inside
+  `TRUSTED_PROXIES` (engine and PURGE alike); origin requests keep and extend `X-Forwarded-For` and keep
+  `-Proto`/`-Host`/`Forwarded` only from trusted peers, otherwise they are dropped and rebuilt from the connection.
+  `List.Trusts` is 0-alloc and only runs when the header is present.
