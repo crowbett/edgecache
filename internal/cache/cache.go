@@ -252,7 +252,11 @@ func (c *Cache) Purge(ctx context.Context, req PurgeRequest) (PurgeResult, error
 		}
 	case req.Prefix != "":
 		kind = PurgeKindPrefix
-		keys = c.tags.ByPrefix(canonicalPrefix(req.Prefix))
+		if isPathPrefix(req.Prefix) {
+			keys = c.tags.ByPathPrefix(canonicalPathPrefix(req.Prefix))
+		} else {
+			keys = c.tags.ByPrefix(canonicalPrefix(req.Prefix))
+		}
 	default:
 		kind = PurgeKindTag
 		keys = c.tags.ByTag(req.Tag)
@@ -483,6 +487,26 @@ func canonicalNames(names []string) []string {
 		}
 	}
 	return out
+}
+
+// isPathPrefix reports whether a purge prefix is origin-relative ("/static/"):
+// it starts with one "/" (a leading "//" is a scheme-relative authority).
+func isPathPrefix(p string) bool {
+	return strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "//")
+}
+
+// canonicalPathPrefix canonicalises a path-relative prefix the way
+// cachekey.Canonical writes the path of every stored URL (escape
+// normalisation), by resolving it against a placeholder authority and cutting
+// that off again. A prefix with a query part is used verbatim, as in
+// canonicalPrefix: sorting a partial query would change what it matches.
+func canonicalPathPrefix(p string) string {
+	const base = "http://h"
+	u, err := url.Parse(base + p)
+	if err != nil || u.Host != "h" || u.RawQuery != "" || strings.Contains(p, "?") {
+		return p
+	}
+	return strings.TrimPrefix(cachekey.Canonical(u), base)
 }
 
 // canonicalPrefix canonicalises an absolute URL prefix so it matches the
