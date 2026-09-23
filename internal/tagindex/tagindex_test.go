@@ -139,3 +139,36 @@ func TestSnapshotRemoveStale(t *testing.T) {
 		t.Fatalf("empty snapshot removed %d", n)
 	}
 }
+
+func TestByPathPrefix(t *testing.T) {
+	t.Parallel()
+	ix := NewIndex()
+	k1, k2, k3, k4, k5 := key("1"), key("2"), key("3"), key("4"), key("5")
+	ix.Add(k1, "http://a.example/static/app.js", nil)
+	ix.Add(k2, "https://b.example:8443/static/css/site.css?v=2", nil)
+	ix.Add(k3, "http://a.example/staticfile", nil)
+	ix.Add(k4, "http://a.example/api/static/x", nil)
+	ix.Add(k5, "http://a.example/", nil)
+	tests := []struct {
+		prefix string
+		want   []cachekey.Key
+	}{
+		{"/static/", []cachekey.Key{k1, k2}},
+		{"/static", []cachekey.Key{k1, k2, k3}},
+		{"/static/css/site.css?v=", []cachekey.Key{k2}},
+		{"/", []cachekey.Key{k1, k2, k3, k4, k5}},
+		{"/nothing", nil},
+	}
+	for _, tc := range tests {
+		if got, want := sorted(ix.ByPathPrefix(tc.prefix)), sorted(tc.want); !slices.Equal(got, want) {
+			t.Errorf("ByPathPrefix(%q) = %v, want %v", tc.prefix, got, want)
+		}
+	}
+	for _, tc := range []struct{ in, want string }{
+		{"http://h/p?q", "/p?q"}, {"http://h", ""}, {"no-scheme/p", ""}, {"https://[::1]:8/x", "/x"},
+	} {
+		if got := pathOf(tc.in); got != tc.want {
+			t.Errorf("pathOf(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

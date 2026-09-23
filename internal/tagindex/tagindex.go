@@ -119,6 +119,38 @@ func (ix *Index) ByPrefix(prefix string) []cachekey.Key {
 	return out
 }
 
+// ByPathPrefix returns the keys whose canonical URL's path-and-query (the part
+// from the first "/" after scheme://authority) starts with prefix, whatever
+// the scheme and host. The proxy fronts one origin, so every Host a client
+// used names the same origin resource: "/static/" means /static/* under every
+// authority the cache has stored. It is a linear scan like ByPrefix.
+func (ix *Index) ByPathPrefix(prefix string) []cachekey.Key {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	var out []cachekey.Key
+	for k, rec := range ix.keys {
+		if strings.HasPrefix(pathOf(rec.url), prefix) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// pathOf is the path-and-query of a canonical absolute URL, "" when it has no
+// authority part or no path.
+func pathOf(u string) string {
+	i := strings.Index(u, "://")
+	if i < 0 {
+		return ""
+	}
+	rest := u[i+3:]
+	j := strings.IndexByte(rest, '/')
+	if j < 0 {
+		return ""
+	}
+	return rest[j:]
+}
+
 // Snapshot returns a stamp for every indexed row. Pair it with RemoveStale to
 // drop rows whose entries the store has since evicted: snapshot first, walk
 // the store, then RemoveStale with the walk's result, so a row added during
