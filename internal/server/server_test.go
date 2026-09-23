@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/crowbett/edgecache/internal/cache"
 	apihttp "github.com/crowbett/edgecache/internal/http"
 	"github.com/crowbett/edgecache/internal/store"
+	"github.com/crowbett/edgecache/internal/trustproxy"
 )
 
 // fakePurger records every request and answers with a fixed result or error.
@@ -192,23 +194,40 @@ func TestPurgeAuthMatrix(t *testing.T) {
 
 func TestProxyPurgeURL(t *testing.T) {
 	t.Parallel()
-	purger := &fakePurger{}
-	d, _ := testDeps(t, purger)
-	h := NewProxyHandler(Config{PurgeToken: "t"}, d)
-	req := httptest.NewRequest(MethodPurge, "/obj/42?b=2&a=1", http.NoBody)
-	req.Host = "cache.example:8081"
-	req.Header.Set(PurgeHeader, "t")
-	req.Header.Set("X-Forwarded-Proto", "https")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	trusted := trustproxy.New([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
+	tests := []struct {
+		name    string
+		trusted trustproxy.List
+		remote  string
+		want    string
+	}{
+		{"no trusted proxies: header ignored", trustproxy.List{}, "10.1.2.3:4444", "http://cache.example:8081/obj/42?b=2&a=1"},
+		{"untrusted peer: header ignored", trusted, "192.0.2.1:4444", "http://cache.example:8081/obj/42?b=2&a=1"},
+		{"trusted peer: header honoured", trusted, "10.1.2.3:4444", "https://cache.example:8081/obj/42?b=2&a=1"},
 	}
-	if got := purger.last(t).URL; got != "https://cache.example:8081/obj/42?b=2&a=1" {
-		t.Errorf("url = %q", got)
-	}
-	if rec.Header().Get(apihttp.RequestIDHeader) == "" {
-		t.Error("RequestID middleware missing on the proxy chain")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			purger := &fakePurger{}
+			d, _ := testDeps(t, purger)
+			h := NewProxyHandler(Config{PurgeToken: "t", TrustedProxies: tc.trusted}, d)
+			req := httptest.NewRequest(MethodPurge, "/obj/42?b=2&a=1", http.NoBody)
+			req.Host = "cache.example:8081"
+			req.RemoteAddr = tc.remote
+			req.Header.Set(PurgeHeader, "t")
+			req.Header.Set("X-Forwarded-Proto", "https")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+			}
+			if got := purger.last(t).URL; got != tc.want {
+				t.Errorf("url = %q, want %q", got, tc.want)
+			}
+			if rec.Header().Get(apihttp.RequestIDHeader) == "" {
+				t.Error("RequestID middleware missing on the proxy chain")
+			}
+		})
 	}
 }
 

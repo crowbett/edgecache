@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"net/textproto"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crowbett/edgecache/internal/trustproxy"
 )
 
 // Byte-size units accepted by ParseBytes ("512MiB", "5GiB", "1024", ...).
@@ -99,6 +102,11 @@ type Config struct {
 
 	JanitorInterval     time.Duration // EDGECACHE_JANITOR_INTERVAL: tombstone sweep + gauge refresh tick
 	CollapseLeadTimeout time.Duration // EDGECACHE_COLLAPSE_LEAD_TIMEOUT: collapse leader budget
+
+	// TrustedProxies are the peers whose X-Forwarded-Proto/-For/-Host and
+	// Forwarded headers are honoured (EDGECACHE_TRUSTED_PROXIES, comma-separated
+	// CIDRs or IPs); empty trusts nobody.
+	TrustedProxies []netip.Prefix
 }
 
 // Load reads configuration from the environment, applying the documented
@@ -201,6 +209,9 @@ func Load() (Config, error) {
 		}
 	}
 	var err error
+	if cfg.TrustedProxies, err = trustproxy.Parse(os.Getenv("EDGECACHE_TRUSTED_PROXIES")); err != nil {
+		errs = append(errs, fmt.Errorf("EDGECACHE_TRUSTED_PROXIES: %w", err))
+	}
 	if cfg.HeuristicFraction, err = getFloat("EDGECACHE_HEURISTIC_FRACTION", cfg.HeuristicFraction); err != nil {
 		errs = append(errs, err)
 	}

@@ -78,7 +78,7 @@ func (c *Cache) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rq.u = absoluteURL(r)
+	rq.u = c.absoluteURL(r)
 	rq.k0 = cachekey.Primary(http.MethodGet, rq.u)
 	if e, key := rq.lookup(); e != nil {
 		rq.serveStored(e, key)
@@ -414,7 +414,7 @@ func (rq *request) forward(label string, reason rfc9111.Reason) (int, http.Heade
 func (rq *request) invalidateFor(hdr http.Header) {
 	c, r := rq.c, rq.r
 	ctx := r.Context()
-	base := absoluteURL(r)
+	base := c.absoluteURL(r)
 	c.invalidate(ctx, base)
 	for _, name := range []string{"Location", "Content-Location"} {
 		v := hdr.Get(name)
@@ -431,8 +431,10 @@ func (rq *request) invalidateFor(hdr http.Header) {
 
 // absoluteURL is r.URL with scheme and host filled in from the request
 // (TLS / X-Forwarded-Proto, Host), the same form server.requestURL builds for
-// PURGE so both derive the same primary key.
-func absoluteURL(r *http.Request) *url.URL {
+// PURGE so both derive the same primary key. The scheme is part of the cache
+// key (RFC 9111 §2), so X-Forwarded-Proto counts only from a trusted proxy:
+// from anyone else it would let a plain-HTTP client write https entries.
+func (c *Cache) absoluteURL(r *http.Request) *url.URL {
 	if r.URL.IsAbs() {
 		return r.URL
 	}
@@ -441,7 +443,7 @@ func absoluteURL(r *http.Request) *url.URL {
 	if r.TLS != nil {
 		u.Scheme = "https"
 	}
-	if p := r.Header.Get("X-Forwarded-Proto"); p == "https" || p == "http" {
+	if p := r.Header.Get("X-Forwarded-Proto"); (p == "https" || p == "http") && c.cfg.TrustedProxies.Trusts(r.RemoteAddr) {
 		u.Scheme = p
 	}
 	u.Host = r.Host

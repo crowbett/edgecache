@@ -32,6 +32,7 @@ import (
 	"github.com/crowbett/edgecache/internal/rfc9111"
 	"github.com/crowbett/edgecache/internal/server"
 	"github.com/crowbett/edgecache/internal/tiered"
+	"github.com/crowbett/edgecache/internal/trustproxy"
 )
 
 // Budgets for the teardown stages that are not user-configurable (stage 2 is
@@ -95,12 +96,14 @@ func run() error {
 		}
 	}()
 
+	trusted := trustproxy.New(cfg.TrustedProxies)
 	org, err := origin.New(origin.Config{
 		Base:            cfg.Origin,
 		HostOverride:    cfg.OriginHost,
 		HeaderTimeout:   cfg.OriginHeaderTimeout,
 		Total:           cfg.OriginTimeout,
 		MaxConnsPerHost: cfg.OriginMaxConns,
+		TrustedProxies:  trusted,
 	}, logger)
 	if err != nil {
 		return fmt.Errorf("origin: %w", err)
@@ -125,6 +128,7 @@ func run() error {
 		JanitorInterval:     cfg.JanitorInterval,
 		CollapseLeadTimeout: cfg.CollapseLeadTimeout,
 		PurgeVerbose:        cfg.PurgeVerbose,
+		TrustedProxies:      trusted,
 		Debug:               cfg.LogLevel <= slog.LevelDebug, // X-Cache-Key on responses
 	}, st, org, reg, logger)
 	if err != nil {
@@ -141,6 +145,7 @@ func run() error {
 		PurgeToken:      cfg.PurgeToken,
 		RequestTimeout:  cfg.RequestTimeout,
 		ShutdownTimeout: cfg.ShutdownTimeout,
+		TrustedProxies:  trusted,
 	}
 	proxySrv, adminSrv := server.NewServers(srvCfg, server.Deps{
 		Proxy:         eng.Handler(),

@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/crowbett/edgecache/internal/trustproxy"
 )
 
 func mustURL(t *testing.T, s string) *url.URL {
@@ -437,5 +439,50 @@ func TestIsConnError(t *testing.T) {
 	}
 	if isConnError(errors.New("something else")) {
 		t.Fatal("unknown errors must not be retried")
+	}
+}
+
+func TestForwardedHeadersHonourTrustedProxies(t *testing.T) {
+	t.Parallel()
+	trusted, err := trustproxy.Parse("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spoof := map[string]string{
+		"X-Forwarded-For":   "203.0.113.9",
+		"X-Forwarded-Proto": "https",
+		"X-Forwarded-Host":  "victim.example",
+		"Forwarded":         "for=203.0.113.9;proto=https",
+	}
+	tests := []struct {
+		name                 string
+		list                 trustproxy.List
+		remote               string
+		wantFor, wantProto   string
+		wantHost, wantFwdHdr string
+	}{
+		{"no list: spoofed fields replaced", trustproxy.List{}, "10.0.0.7:5555", "10.0.0.7", "http", "edge.local", ""},
+		{"untrusted peer: replaced", trustproxy.New(trusted), "192.0.2.1:5555", "192.0.2.1", "http", "edge.local", ""},
+		{"trusted peer: chain extended, proto/host kept", trustproxy.New(trusted), "10.0.0.7:5555", "203.0.113.9, 10.0.0.7", "https", "victim.example", "for=203.0.113.9;proto=https"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			o := newOrigin(t, "http://127.0.0.1:1", func(c *Config) { c.TrustedProxies = tc.list })
+			in := httptest.NewRequest(http.MethodGet, "http://edge.local/x", http.NoBody)
+			in.RemoteAddr = tc.remote
+			for k, v := range spoof {
+				in.Header.Set(k, v)
+			}
+			req, err := o.build(context.Background(), in, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := []string{req.Header.Get("X-Forwarded-For"), req.Header.Get("X-Forwarded-Proto"), req.Header.Get("X-Forwarded-Host"), req.Header.Get("Forwarded")}
+			want := []string{tc.wantFor, tc.wantProto, tc.wantHost, tc.wantFwdHdr}
+			if strings.Join(got, "|") != strings.Join(want, "|") {
+				t.Errorf("For|Proto|Host|Forwarded = %q, want %q", got, want)
+			}
+		})
 	}
 }

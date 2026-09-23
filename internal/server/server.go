@@ -28,6 +28,7 @@ import (
 	"github.com/crowbett/edgecache/internal/cache"
 	apihttp "github.com/crowbett/edgecache/internal/http"
 	"github.com/crowbett/edgecache/internal/store"
+	"github.com/crowbett/edgecache/internal/trustproxy"
 )
 
 // PurgeHeader is the request header carrying the PURGE credential on the proxy listener.
@@ -59,6 +60,9 @@ type Config struct {
 	RequestTimeout time.Duration
 	// ShutdownTimeout is the proxy drain budget the server reports in /admin/stats.
 	ShutdownTimeout time.Duration
+	// TrustedProxies are the peers whose X-Forwarded-Proto is honoured when
+	// PURGE rebuilds the URL it addresses (the engine applies the same rule).
+	TrustedProxies trustproxy.List
 }
 
 // Purger is what the purge endpoints need from the engine; *cache.Cache satisfies it.
@@ -107,7 +111,7 @@ func NewProxyHandler(cfg Config, d Deps) http.Handler {
 			writeError(w, status, msg)
 			return
 		}
-		doPurge(w, r, d.Purger, log, cache.PurgeRequest{URL: requestURL(r)}, "url")
+		doPurge(w, r, d.Purger, log, cache.PurgeRequest{URL: requestURL(r, cfg.TrustedProxies)}, "url")
 	})
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == MethodPurge {
@@ -298,8 +302,9 @@ func purgeKind(req cache.PurgeRequest) string {
 }
 
 // requestURL rebuilds the absolute URL a proxy-listener request addressed
-// (scheme://host/path?query), which is what the engine keys on.
-func requestURL(r *http.Request) string {
+// (scheme://host/path?query), which is what the engine keys on. As in the
+// engine, X-Forwarded-Proto counts only from a trusted peer.
+func requestURL(r *http.Request, trusted trustproxy.List) string {
 	if r.URL.IsAbs() {
 		return r.URL.String()
 	}
@@ -307,7 +312,7 @@ func requestURL(r *http.Request) string {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if p := r.Header.Get("X-Forwarded-Proto"); p == "https" || p == "http" {
+	if p := r.Header.Get("X-Forwarded-Proto"); (p == "https" || p == "http") && trusted.Trusts(r.RemoteAddr) {
 		scheme = p
 	}
 	return scheme + "://" + r.Host + r.URL.RequestURI()
@@ -369,6 +374,7 @@ func buildStats(cfg Config, d Deps, started time.Time) Stats {
 	s.Config["purge_token_set"] = cfg.PurgeToken != ""
 	s.Config["request_timeout"] = cfg.RequestTimeout.String()
 	s.Config["shutdown_timeout"] = cfg.ShutdownTimeout.String()
+	s.Config["trusted_proxies"] = cfg.TrustedProxies.String()
 	if d.Stats != nil {
 		if raw := d.Stats(); json.Valid(raw) {
 			s.Metrics = raw

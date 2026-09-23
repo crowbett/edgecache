@@ -25,6 +25,7 @@ import (
 	"github.com/crowbett/edgecache/internal/rfc9111"
 	"github.com/crowbett/edgecache/internal/store"
 	"github.com/crowbett/edgecache/internal/tagindex"
+	"github.com/crowbett/edgecache/internal/trustproxy"
 )
 
 // Store is dumb keyed blob storage as the engine needs it; every tier satisfies it.
@@ -112,6 +113,9 @@ type Config struct {
 	JanitorInterval     time.Duration
 	CollapseLeadTimeout time.Duration
 	PurgeVerbose        bool
+	// TrustedProxies are the peers whose X-Forwarded-Proto is honoured when
+	// the request URL (and so the cache key) is rebuilt; zero value: nobody.
+	TrustedProxies trustproxy.List
 	// Debug adds X-Cache-Key to responses.
 	Debug bool
 	// Now is the engine's clock; nil means time.Now. Tests inject a fixed one.

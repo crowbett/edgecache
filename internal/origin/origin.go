@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/crowbett/edgecache/internal/rfc9111"
+	"github.com/crowbett/edgecache/internal/trustproxy"
 )
 
 // DefaultVia is the Via value used when Config.Via is empty.
@@ -47,6 +48,9 @@ type Config struct {
 	DialTimeout, HeaderTimeout, Total time.Duration
 	// MaxConnsPerHost and MaxIdleConns size the transport pool.
 	MaxConnsPerHost, MaxIdleConns int
+	// TrustedProxies are the peers whose X-Forwarded-* / Forwarded fields are
+	// passed on; from anyone else they are replaced (zero value: nobody).
+	TrustedProxies trustproxy.List
 }
 
 // Origin is the upstream client. It satisfies cache.Fetcher.
@@ -174,24 +178,40 @@ func (o *Origin) build(ctx context.Context, r *http.Request, body *countingBody)
 		req.Host = o.cfg.Base.Host
 	}
 	req.Header.Add("Via", o.cfg.Via)
-	if ip, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && ip != "" {
-		if prior := req.Header.Get("X-Forwarded-For"); prior != "" {
-			req.Header.Set("X-Forwarded-For", prior+", "+ip)
-		} else {
-			req.Header.Set("X-Forwarded-For", ip)
+	o.forwarded(req.Header, r)
+	return req, nil
+}
+
+// forwarded sets X-Forwarded-For/-Proto/-Host on the upstream header h for
+// the client request r. A trusted peer (Config.TrustedProxies) speaks for the
+// client, so its X-Forwarded-For chain is extended with its own address and
+// its X-Forwarded-Proto/-Host and Forwarded are kept. From any other peer those
+// fields are client-controlled and dropped: the chain restarts at the peer and
+// proto/host describe this hop only, so the origin never sees a spoofed hop.
+func (o *Origin) forwarded(h http.Header, r *http.Request) {
+	trusted := o.cfg.TrustedProxies.Trusts(r.RemoteAddr)
+	if !trusted {
+		for _, k := range []string{"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host", "Forwarded"} {
+			h.Del(k)
 		}
 	}
-	if req.Header.Get("X-Forwarded-Proto") == "" {
+	if ip, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && ip != "" {
+		if prior := h.Get("X-Forwarded-For"); prior != "" {
+			h.Set("X-Forwarded-For", prior+", "+ip)
+		} else {
+			h.Set("X-Forwarded-For", ip)
+		}
+	}
+	if p := h.Get("X-Forwarded-Proto"); p != "http" && p != "https" {
 		proto := "http"
 		if r.TLS != nil {
 			proto = "https"
 		}
-		req.Header.Set("X-Forwarded-Proto", proto)
+		h.Set("X-Forwarded-Proto", proto)
 	}
-	if req.Header.Get("X-Forwarded-Host") == "" && r.Host != "" {
-		req.Header.Set("X-Forwarded-Host", r.Host)
+	if h.Get("X-Forwarded-Host") == "" && r.Host != "" {
+		h.Set("X-Forwarded-Host", r.Host)
 	}
-	return req, nil
 }
 
 // retryable reports whether a failed first attempt may be sent again: the

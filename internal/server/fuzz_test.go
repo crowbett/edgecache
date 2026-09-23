@@ -3,9 +3,12 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/crowbett/edgecache/internal/trustproxy"
 )
 
 // validHost mirrors the byte set net/http accepts in a Host header, minus the
@@ -36,6 +39,7 @@ func FuzzRequestURL(f *testing.F) {
 	f.Add("?", "0", "0")
 	f.Add("0", "?#", "")
 	f.Add("h:", "/x", "")
+	fuzzTrusted := trustproxy.New([]netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
 	f.Fuzz(func(t *testing.T, host, target, proto string) {
 		if !strings.HasPrefix(target, "/") && !strings.Contains(target, "://") {
 			target = "/" + target
@@ -52,7 +56,11 @@ func FuzzRequestURL(f *testing.F) {
 		if proto != "" {
 			r.Header.Set("X-Forwarded-Proto", proto)
 		}
-		got := requestURL(r)
+		// httptest's RemoteAddr is 192.0.2.1: trusted here, so the header path runs.
+		got := requestURL(r, fuzzTrusted)
+		if untrusted := requestURL(r, trustproxy.List{}); !u.IsAbs() && !strings.HasPrefix(untrusted, "http://") {
+			t.Fatalf("X-Forwarded-Proto %q from an untrusted peer changed the scheme: %q", proto, untrusted)
+		}
 		if !strings.HasPrefix(got, "http://") && !strings.HasPrefix(got, "https://") && !u.IsAbs() {
 			t.Fatalf("scheme missing in %q", got)
 		}
