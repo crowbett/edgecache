@@ -687,6 +687,14 @@ func TestConcurrent(t *testing.T) {
 		commits, hits, busy       atomic.Int64
 		overshoot, corrupt, other atomic.Int64
 	)
+	// A slow runner (windows-latest under -race) can spend the whole window on
+	// a handful of fsynced commits before any reader finds one: keep going past
+	// the deadline until both sides saw traffic, bounded by a hard stop.
+	hard := time.Now().Add(15 * time.Second)
+	running := func() bool {
+		now := time.Now()
+		return now.Before(deadline) || ((commits.Load() == 0 || hits.Load() == 0) && now.Before(hard))
+	}
 	limit := int64(capacity) + s.Overdraft()
 	check := func() {
 		if b := s.Stats()[store.TierDisk].Bytes; b > limit {
@@ -698,7 +706,7 @@ func TestConcurrent(t *testing.T) {
 		go func(seed uint64) {
 			defer wg.Done()
 			r := rand.New(rand.NewPCG(seed, 1))
-			for time.Now().Before(deadline) {
+			for running() {
 				i := r.IntN(keyspace)
 				size := 1 + r.IntN(maxObj)
 				body := bytes.Repeat([]byte{byte(i)}, size)
@@ -738,7 +746,7 @@ func TestConcurrent(t *testing.T) {
 		go func(seed uint64) {
 			defer wg.Done()
 			r := rand.New(rand.NewPCG(seed, 2))
-			for time.Now().Before(deadline) {
+			for running() {
 				i := r.IntN(keyspace)
 				e, err := s.Get(ctx, key(i))
 				if err != nil {
