@@ -61,6 +61,11 @@ Responses carry `X-Cache: HIT|MISS|STALE|REVALIDATED|BYPASS`, `Age`, `X-Cache-Re
   renamed, **meta last** so any partial state is detectable; the index is rebuilt by scanning at start
   (a corrupt meta is deleted and logged, never a startup failure). Entries are refcounted and an
   eviction of a held file goes on a tombstone list the janitor retries (NTFS will not unlink an open file).
+  Measured on this box (5,000 entries of 16 KiB in `%TEMP%`, 2026-10-07): a commit costs ~6.8 ms (two fsyncs),
+  and the startup scan takes 23-30 ms warm, but **47 s on the first start after the fill**: Windows Defender
+  scans each newly created file on its first open. Put `EDGECACHE_DISK_DIR` on a Defender-excluded path on
+  Windows; Linux and containers do not pay it. A persistent index would only move that cost to each entry's
+  first read, so the scan stays.
 - **tiered**: memory in front of disk, promotion on a disk hit that fits `MEM_MAX_OBJECT_BYTES`, fan-out
   writer on a miss. `DISK_DIR=""` gives a pure-memory cache.
 
