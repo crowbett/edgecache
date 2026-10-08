@@ -185,6 +185,17 @@ func (g *Group[T]) TryStart(key string) (done func(), ok bool) {
 	}, true
 }
 
+// Waiters reports how many callers have joined key's in-flight leader (0 when
+// none is running).
+func (g *Group[T]) Waiters(key string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if c, ok := g.calls[key]; ok {
+		return c.waiters
+	}
+	return 0
+}
+
 // Root returns the context every leader and background job derives from.
 func (g *Group[T]) Root() context.Context { return g.root }
 

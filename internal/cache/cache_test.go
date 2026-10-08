@@ -771,7 +771,8 @@ func TestConcurrentMissesCollapse(t *testing.T) {
 			results[i] = h.do(http.MethodGet, target)
 		}()
 	}
-	time.Sleep(150 * time.Millisecond) // let the waiters join the leader
+	key := cachekey.Primary(http.MethodGet, mustURL(t, target)).String()
+	waitUntil(t, "every waiter to join the leader", func() bool { return h.c.group.Waiters(key) == n-1 })
 	close(release)
 	wg.Wait()
 	if c := h.o.calls.Load(); c != 1 {

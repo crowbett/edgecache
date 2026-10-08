@@ -395,7 +395,7 @@ func TestDoEarlyBlockedWaiterWakesOnPublish(t *testing.T) {
 		})
 		got <- early && v == 1
 	}()
-	waitFor(t, func() bool { return g.waiterCountFor("k") == 1 })
+	waitFor(t, func() bool { return g.Waiters("k") == 1 })
 	close(doPublish)
 	if ok := <-got; !ok {
 		t.Error("blocked waiter did not get the early value")
@@ -427,21 +427,11 @@ func TestDoEarlyWithoutPublishWaitsForFinal(t *testing.T) {
 		}
 		got <- v
 	}()
-	waitFor(t, func() bool { return g.waiterCountFor("k") == 1 })
+	waitFor(t, func() bool { return g.Waiters("k") == 1 })
 	close(release)
 	if v := <-got; v != 7 {
 		t.Errorf("waiter value = %d, want 7", v)
 	}
-}
-
-// waiterCountFor reports the waiters joined to key's in-flight call (0 if none).
-func (g *Group[T]) waiterCountFor(key string) int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if c, ok := g.calls[key]; ok {
-		return c.waiters
-	}
-	return 0
 }
 
 func waitFor(t *testing.T, cond func() bool) {
