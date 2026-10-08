@@ -80,7 +80,7 @@ not have read from the store is shared. The body is retained for late joiners up
 before) and keeps only what an attached waiter has not yet sent. While a waiter is attached the leader reads
 the origin body to the end even if its own client left or the store refused the object. `0` turns
 streaming off. If the origin body fails after the status line went out, the leader and every waiter abort
-the client connection () rather than end a chunked body cleanly, so a short body is
+the client connection (`http.ErrAbortHandler`) rather than end a chunked body cleanly, so a short body is
 never mistaken for a complete one. On the tee loop a client write error does not abort the fetch:
 the leader keeps filling the store up to `ORPHAN_MAX_BYTES`, then aborts, so a cancelled request still
 lands an entry. Proof from the smoke run: 20 concurrent cold `GET /obj/777` -> origin `{"total":1}`,
@@ -207,9 +207,9 @@ With streaming off a waiter's first byte arrives after the whole download plus t
 on, at the same time as the leader's (26.4 ms, -95 %), and its total drops to the leader's (p99 597 -> 534 ms)
 because the copy out of the store no longer follows the download. All 960 requests per mode returned the
 full 4 MiB body; every run's rows are in the summary. The leader is within noise (the first run,
-, taken before the last stream change, agrees: waiter TTFB 539 -> 25.6 ms).
+`results/herd/20261007-191712/`, taken before the last stream change, agrees: waiter TTFB 539 -> 25.6 ms).
 
-Cost on a miss nobody joins (, 16 KiB, memstore, 6 runs, benchstat): +16.7 KiB/op (the
+Cost on a miss nobody joins (`BenchmarkHandlerMiss`, 16 KiB, memstore, 6 runs, benchstat): +16.7 KiB/op (the
 body copy kept for late joiners) and +5 allocs/op (78 -> 83); ns/op inside the noise (p=0.39).
 
 ### PGO (`scripts/pgo.ps1`, warm mode, A/B/A/B interleaved)
