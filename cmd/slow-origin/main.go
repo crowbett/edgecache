@@ -1,9 +1,9 @@
 // Command slow-origin is the benchmark origin: an HTTP server with configurable
-// latency and jitter, body size, Cache-Control mode and keyspace serving
+// latency and jitter, body size and send rate, Cache-Control mode and keyspace serving
 // GET /obj/{n}, plus GET /admin/hits (JSON counters) and DELETE /admin/hits
 // (reset). Every option is an environment variable (ORIGIN_ADDR,
-// ORIGIN_LATENCY, ORIGIN_JITTER, ORIGIN_BODY_BYTES, ORIGIN_CACHE_CONTROL,
-// ORIGIN_KEYSPACE) that the flag of the same name overrides.
+// ORIGIN_LATENCY, ORIGIN_JITTER, ORIGIN_BODY_BYTES, ORIGIN_RATE,
+// ORIGIN_CACHE_CONTROL, ORIGIN_KEYSPACE) that the flag of the same name overrides.
 //
 // ORIGIN_CACHE_CONTROL modes: a literal Cache-Control value such as
 // "max-age=60" or "no-store", or one of the named presets "etag" (max-age=1
@@ -37,6 +37,7 @@ type options struct {
 	latency      time.Duration // ORIGIN_LATENCY
 	jitter       time.Duration // ORIGIN_JITTER
 	bodyBytes    int           // ORIGIN_BODY_BYTES
+	rate         int           // ORIGIN_RATE
 	cacheControl string        // ORIGIN_CACHE_CONTROL
 	keyspace     int           // ORIGIN_KEYSPACE
 }
@@ -48,6 +49,10 @@ type Config struct {
 	Latency, Jitter time.Duration
 	// BodyBytes is the response body length.
 	BodyBytes int
+	// Rate paces the body to this many bytes per second (flushed in 32 KiB
+	// slices), so a large object takes a known time to download; 0 sends it
+	// as fast as the connection takes it.
+	Rate int
 	// CacheControl is a literal Cache-Control value or a preset: etag | vary | swr.
 	CacheControl string
 	// Keyspace is the number of objects: /obj/0 .. /obj/{Keyspace-1}.
@@ -79,6 +84,7 @@ func run() error {
 	flag.DurationVar(&opts.latency, "latency", opts.latency, "base response latency (ORIGIN_LATENCY)")
 	flag.DurationVar(&opts.jitter, "jitter", opts.jitter, "latency jitter, +/- (ORIGIN_JITTER)")
 	flag.IntVar(&opts.bodyBytes, "body", opts.bodyBytes, "response body bytes (ORIGIN_BODY_BYTES)")
+	flag.IntVar(&opts.rate, "rate", opts.rate, "body send rate in bytes/s, 0 = unpaced (ORIGIN_RATE)")
 	flag.StringVar(&opts.cacheControl, "cc", opts.cacheControl, "Cache-Control value or preset etag|vary|swr (ORIGIN_CACHE_CONTROL)")
 	flag.IntVar(&opts.keyspace, "keyspace", opts.keyspace, "number of objects under /obj/ (ORIGIN_KEYSPACE)")
 	flag.Parse()
@@ -93,6 +99,7 @@ func run() error {
 			Latency:      opts.latency,
 			Jitter:       opts.jitter,
 			BodyBytes:    opts.bodyBytes,
+			Rate:         opts.rate,
 			CacheControl: opts.cacheControl,
 			Keyspace:     opts.keyspace,
 		}),
@@ -105,7 +112,7 @@ func run() error {
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("slow-origin listening", slog.String("addr", opts.addr), slog.Duration("latency", opts.latency),
-			slog.Duration("jitter", opts.jitter), slog.Int("body_bytes", opts.bodyBytes),
+			slog.Duration("jitter", opts.jitter), slog.Int("body_bytes", opts.bodyBytes), slog.Int("rate", opts.rate),
 			slog.String("cache_control", opts.cacheControl), slog.Int("keyspace", opts.keyspace))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -229,7 +236,36 @@ func (s *server) obj(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write([]byte(head))
-	_, _ = w.Write(body)
+	if s.cfg.Rate <= 0 {
+		_, _ = w.Write(body)
+		return
+	}
+	s.pace(r.Context(), w, body)
+}
+
+// pace writes body in 32 KiB slices, flushing each and sleeping so the
+// cumulative bytes never run ahead of Rate.
+func (s *server) pace(ctx context.Context, w http.ResponseWriter, body []byte) {
+	const slice = 32 << 10
+	rc := http.NewResponseController(w)
+	start := time.Now()
+	sent := 0
+	for len(body) > 0 {
+		n := min(slice, len(body))
+		if _, err := w.Write(body[:n]); err != nil {
+			return
+		}
+		_ = rc.Flush()
+		body, sent = body[n:], sent+n
+		due := start.Add(time.Duration(float64(sent) / float64(s.cfg.Rate) * float64(time.Second)))
+		t := time.NewTimer(time.Until(due))
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+			return
+		}
+	}
 }
 
 // mutate answers unsafe methods on an object with 204 so the proxy's
@@ -383,7 +419,7 @@ func loadOptions() (options, error) {
 	for _, n := range []struct {
 		key string
 		dst *int
-	}{{"ORIGIN_BODY_BYTES", &o.bodyBytes}, {"ORIGIN_KEYSPACE", &o.keyspace}} {
+	}{{"ORIGIN_BODY_BYTES", &o.bodyBytes}, {"ORIGIN_RATE", &o.rate}, {"ORIGIN_KEYSPACE", &o.keyspace}} {
 		if v := os.Getenv(n.key); v != "" {
 			parsed, err := strconv.Atoi(v)
 			if err != nil {
@@ -407,6 +443,9 @@ func (o options) validate() error {
 	}
 	if o.bodyBytes < 0 {
 		errs = append(errs, errors.New("ORIGIN_BODY_BYTES must be >= 0"))
+	}
+	if o.rate < 0 {
+		errs = append(errs, errors.New("ORIGIN_RATE must be >= 0"))
 	}
 	if o.latency < 0 || o.jitter < 0 {
 		errs = append(errs, errors.New("ORIGIN_LATENCY and ORIGIN_JITTER must be >= 0"))

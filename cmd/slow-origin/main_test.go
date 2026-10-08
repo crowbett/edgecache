@@ -117,6 +117,25 @@ func TestHandlerModes(t *testing.T) {
 	}
 }
 
+func TestHandlerRatePacesBody(t *testing.T) {
+	t.Parallel()
+	const size, rate = 128 << 10, 1 << 20 // ~125 ms at 1 MiB/s
+	srv := httptest.NewServer(Handler(Config{BodyBytes: size, Rate: rate, CacheControl: "max-age=60", Keyspace: 1}))
+	defer srv.Close()
+	start := time.Now()
+	r := get(t, http.DefaultClient, srv.URL+"/obj/0")
+	elapsed := time.Since(start)
+	if r.code != http.StatusOK || len(r.body) != size {
+		t.Fatalf("status %d, %d bytes; want 200, %d", r.code, len(r.body), size)
+	}
+	if !strings.HasPrefix(r.body, "key=0\n") {
+		t.Errorf("body starts %q", r.body[:8])
+	}
+	if elapsed < 90*time.Millisecond {
+		t.Errorf("paced body arrived in %s, want >= ~125ms", elapsed)
+	}
+}
+
 // TestEndToEndThroughCache mounts the real engine (memstore + origin client +
 // metrics) in front of the in-process origin: repeated GETs hit once upstream,
 // an unsafe method invalidates, and the metrics exposition counts it all.
