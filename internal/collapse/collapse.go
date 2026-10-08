@@ -16,6 +16,12 @@ type call[T any] struct {
 	val     T
 	err     error
 	waiters int // guarded by Group.mu
+
+	// early is closed when the leader publishes an interim value (DoEarly);
+	// eval is written once before that close and read only after it.
+	early     chan struct{}
+	eval      T
+	published bool // guarded by Group.mu
 }
 
 // Group collapses concurrent calls for the same key into one leader. The zero
@@ -60,18 +66,39 @@ func New[T any](root context.Context, lead time.Duration) *Group[T] {
 // even when its ctx is already cancelled: the leader's client vanishing must not
 // abort the fetch the waiters depend on.
 func (g *Group[T]) Do(ctx context.Context, key string, fn func(context.Context) (T, error)) (T, bool, int, error) {
+	v, shared, _, w, err := g.DoEarly(ctx, key, func(ctx context.Context, _ func(T)) (T, error) { return fn(ctx) })
+	return v, shared, w, err
+}
+
+// DoEarly is Do with an interim result: the leader's fn may call publish once
+// (later calls are ignored) and every waiter, already blocked or joining
+// afterwards, returns that value straight away with early true instead of
+// waiting for fn to return. The leader's own return values are always fn's.
+// A waiter returning early reports the waiter count at that moment; the
+// leader's count is final.
+func (g *Group[T]) DoEarly(ctx context.Context, key string, fn func(ctx context.Context, publish func(T)) (T, error)) (v T, shared, early bool, waiters int, err error) {
 	g.mu.Lock()
 	if c, ok := g.calls[key]; ok {
 		c.waiters++
 		g.mu.Unlock()
-		v, w, err := g.wait(ctx, c)
-		return v, true, w, err
+		v, early, waiters, err = g.wait(ctx, c)
+		return v, true, early, waiters, err
 	}
-	c := &call[T]{done: make(chan struct{})}
+	c := &call[T]{done: make(chan struct{}), early: make(chan struct{})}
 	g.calls[key] = c
 	g.markBusyLocked()
 	g.mu.Unlock()
 
+	publish := func(v T) {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		if c.published {
+			return
+		}
+		c.published = true
+		c.eval = v
+		close(c.early)
+	}
 	lctx, cancel := g.leadContext()
 	func() {
 		defer cancel()
@@ -83,28 +110,36 @@ func (g *Group[T]) Do(ctx context.Context, key string, fn func(context.Context) 
 				panic(r)
 			}
 		}()
-		c.val, c.err = fn(lctx)
+		c.val, c.err = fn(lctx, publish)
 	}()
-	waiters := g.finish(key, c)
-	return c.val, waiters > 0, waiters, c.err
+	waiters = g.finish(key, c)
+	return c.val, waiters > 0, false, waiters, c.err
 }
 
-// wait blocks a joiner until the leader publishes or ctx ends; it returns the
-// value, the waiter count and the leader's (or ctx's) error.
-func (g *Group[T]) wait(ctx context.Context, c *call[T]) (T, int, error) {
+// wait blocks a joiner until the leader publishes (early or final) or ctx
+// ends; it returns the value, whether it is the early value,
+// the waiter count and the leader's (or ctx's) error.
+func (g *Group[T]) wait(ctx context.Context, c *call[T]) (T, bool, int, error) {
 	select {
 	case <-c.done:
-		g.mu.Lock()
-		w := c.waiters
-		g.mu.Unlock()
-		return c.val, w, c.err
+		return c.val, false, g.waiterCount(c), c.err
+	default:
+	}
+	select {
+	case <-c.done:
+		return c.val, false, g.waiterCount(c), c.err
+	case <-c.early:
+		return c.eval, true, g.waiterCount(c), nil
 	case <-ctx.Done():
 		var zero T
-		g.mu.Lock()
-		w := c.waiters
-		g.mu.Unlock()
-		return zero, w, ctx.Err()
+		return zero, false, g.waiterCount(c), ctx.Err()
 	}
+}
+
+func (g *Group[T]) waiterCount(c *call[T]) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return c.waiters
 }
 
 // finish publishes the call, removes it from the map and returns its waiter count.

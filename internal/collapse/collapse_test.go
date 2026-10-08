@@ -313,3 +313,144 @@ func TestDoPanicReleasesWaiters(t *testing.T) {
 		t.Fatal("waiter never released after leader panic")
 	}
 }
+
+func TestDoEarlyReleasesWaitersOnPublish(t *testing.T) {
+	t.Parallel()
+	g := New[string](context.Background(), 5*time.Second)
+
+	published := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	fn := func(ctx context.Context, publish func(string)) (string, error) {
+		calls.Add(1)
+		publish("early")
+		publish("ignored") // only the first publish counts
+		close(published)
+		<-release
+		return "final", ctx.Err()
+	}
+
+	leader := make(chan string, 1)
+	go func() {
+		v, _, early, _, err := g.DoEarly(context.Background(), "k", fn)
+		if err != nil || early {
+			t.Errorf("leader: early=%v err=%v", early, err)
+		}
+		leader <- v
+	}()
+	<-published
+
+	// A waiter joining after the publish returns the early value at once,
+	// while the leader is still running.
+	const n = 20
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v, shared, early, _, err := g.DoEarly(context.Background(), "k", fn)
+			if v != "early" || !shared || !early || err != nil {
+				t.Errorf("waiter: v=%q shared=%v early=%v err=%v", v, shared, early, err)
+			}
+		}()
+	}
+	wg.Wait()
+	select {
+	case v := <-leader:
+		t.Fatalf("leader finished before release: %q", v)
+	default:
+	}
+	close(release)
+	if v := <-leader; v != "final" {
+		t.Errorf("leader value = %q, want final", v)
+	}
+	if c := calls.Load(); c != 1 {
+		t.Errorf("fn calls = %d, want 1", c)
+	}
+}
+
+func TestDoEarlyBlockedWaiterWakesOnPublish(t *testing.T) {
+	t.Parallel()
+	g := New[int](context.Background(), 5*time.Second)
+
+	started := make(chan struct{})
+	doPublish := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_, _, _, _, _ = g.DoEarly(context.Background(), "k", func(_ context.Context, publish func(int)) (int, error) {
+			close(started)
+			<-doPublish
+			publish(1)
+			<-release
+			return 2, nil
+		})
+	}()
+	<-started
+
+	got := make(chan bool, 1)
+	go func() {
+		v, _, early, _, _ := g.DoEarly(context.Background(), "k", func(context.Context, func(int)) (int, error) {
+			t.Error("waiter ran fn")
+			return 0, nil
+		})
+		got <- early && v == 1
+	}()
+	waitFor(t, func() bool { return g.waiterCountFor("k") == 1 })
+	close(doPublish)
+	if ok := <-got; !ok {
+		t.Error("blocked waiter did not get the early value")
+	}
+	close(release)
+	if err := g.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDoEarlyWithoutPublishWaitsForFinal(t *testing.T) {
+	t.Parallel()
+	g := New[int](context.Background(), 5*time.Second)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_, _, _, _, _ = g.DoEarly(context.Background(), "k", func(context.Context, func(int)) (int, error) {
+			close(started)
+			<-release
+			return 7, nil
+		})
+	}()
+	<-started
+	got := make(chan int, 1)
+	go func() {
+		v, _, early, _, _ := g.DoEarly(context.Background(), "k", nil)
+		if early {
+			t.Error("early without a publish")
+		}
+		got <- v
+	}()
+	waitFor(t, func() bool { return g.waiterCountFor("k") == 1 })
+	close(release)
+	if v := <-got; v != 7 {
+		t.Errorf("waiter value = %d, want 7", v)
+	}
+}
+
+// waiterCountFor reports the waiters joined to key's in-flight call (0 if none).
+func (g *Group[T]) waiterCountFor(key string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if c, ok := g.calls[key]; ok {
+		return c.waiters
+	}
+	return 0
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met within 2s")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
