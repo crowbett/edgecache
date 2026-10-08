@@ -28,6 +28,9 @@ type fetchResult struct {
 	status int
 	err    error
 	stream *stream
+	// truncated: the origin body failed after the status line went out, so
+	// the client's response is short (see abortIfTruncated).
+	truncated bool
 }
 
 // fetchInto runs one origin exchange for rq on ctx (a detached context) and,
@@ -160,7 +163,7 @@ func (c *Cache) fetchInto(ctx context.Context, rq *request, st *stale, publish f
 	total, wr, rerr := c.tee(body, rq, wr, sh)
 	if rerr != nil {
 		c.log.Warn("cache: origin body", slog.String("path", r.URL.Path), slog.Int64("bytes", total), slog.Any("err", rerr))
-		return fetchResult{status: resp.StatusCode, err: rerr}
+		return fetchResult{status: resp.StatusCode, err: rerr, truncated: true}
 	}
 	if wr == nil {
 		return fetchResult{status: resp.StatusCode, key: key, vary: vary}

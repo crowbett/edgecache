@@ -214,6 +214,7 @@ func (rq *request) miss(st *stale) {
 		if waiters > 0 {
 			c.rec.Collapsed(waiters)
 		}
+		rq.abortIfTruncated(res)
 		return
 	}
 	rq.collapsed = true
@@ -246,7 +247,17 @@ func (rq *request) miss(st *stale) {
 	// not storable, or failed): fetch directly, still on a detached context.
 	ctx, cancel := c.leadCtx()
 	defer cancel()
-	c.fetchInto(ctx, rq, st, nil)
+	rq.abortIfTruncated(c.fetchInto(ctx, rq, st, nil))
+}
+
+// abortIfTruncated aborts the client connection when the origin body failed
+// after the status line was sent. Returning normally would end a chunked
+// response with its terminating chunk, and a short body would look complete
+// to the client (and to any cache behind it).
+func (rq *request) abortIfTruncated(res fetchResult) {
+	if res.truncated && rq.w.wroteHeader {
+		panic(http.ErrAbortHandler)
+	}
 }
 
 // serveStream serves a collapse leader's body while it downloads. It applies
@@ -299,9 +310,12 @@ func (rq *request) serveStream(res fetchResult) bool {
 		}
 	}
 	if !errors.Is(err, io.EOF) {
-		// The leader's origin read failed or this client left mid-body: the
-		// response is short, as the leader's own client sees it.
 		c.log.Debug("cache: stream ended early", slog.String("path", rq.r.URL.Path), slog.Int64("bytes", w.bytes), slog.Any("err", err))
+		if ctx.Err() == nil {
+			// The leader's origin read failed: abort like the leader does
+			// (abortIfTruncated) so the short body is not taken as complete.
+			panic(http.ErrAbortHandler)
+		}
 	}
 	return true
 }

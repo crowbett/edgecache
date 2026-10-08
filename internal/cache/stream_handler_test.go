@@ -39,10 +39,11 @@ func (b *gatedBody) Close() error { return nil }
 // liveRecorder is a ResponseWriter whose body can be observed while the
 // handler is still writing it.
 type liveRecorder struct {
-	hdr  http.Header
-	mu   sync.Mutex
-	code int
-	body bytes.Buffer
+	hdr     http.Header
+	mu      sync.Mutex
+	code    int
+	body    bytes.Buffer
+	aborted bool // the handler panicked with http.ErrAbortHandler
 }
 
 func newLive() *liveRecorder { return &liveRecorder{hdr: http.Header{}} }
@@ -84,7 +85,19 @@ func (h *harness) serveLive(wg *sync.WaitGroup, ctx context.Context, w *liveReco
 	for i := 0; i+1 < len(hdr); i += 2 {
 		r.Header.Set(hdr[i], hdr[i+1])
 	}
-	wg.Go(func() { h.h.ServeHTTP(w, r) })
+	wg.Go(func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				if rec != http.ErrAbortHandler { //nolint:errorlint // sentinel compared by identity per net/http docs
+					panic(rec)
+				}
+				w.mu.Lock()
+				w.aborted = true
+				w.mu.Unlock()
+			}
+		}()
+		h.h.ServeHTTP(w, r)
+	})
 }
 
 func waitUntil(t *testing.T, what string, cond func() bool) {
@@ -216,6 +229,9 @@ func TestStreamOutlivesLeaderClient(t *testing.T) {
 	if got := waiter.String(); got != "one,two,three" {
 		t.Fatalf("waiter body = %q, want the whole body", got)
 	}
+	if leader.aborted || waiter.aborted {
+		t.Errorf("aborted: leader %v waiter %v; a client leaving is not an origin failure", leader.aborted, waiter.aborted)
+	}
 	if n := h.st.len(); n != 0 {
 		t.Errorf("%d entries stored with orphan fetch off", n)
 	}
@@ -241,6 +257,9 @@ func TestStreamOriginErrorTruncatesWaiters(t *testing.T) {
 	wg.Wait()
 	if waiter.String() != "partial" || leader.String() != "partial" {
 		t.Errorf("leader %q waiter %q, want both truncated at the failure", leader.String(), waiter.String())
+	}
+	if !leader.aborted || !waiter.aborted {
+		t.Errorf("aborted: leader %v waiter %v; a short body must abort the connection", leader.aborted, waiter.aborted)
 	}
 	if n := h.st.len(); n != 0 {
 		t.Errorf("%d entries stored from a failed body", n)
