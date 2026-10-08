@@ -36,3 +36,6 @@ results/**
 *.pgo
 !cmd/edgecache/default.pgo
 .task/
+
+# Terraform provider cache (terraform init)
+.terraform/
