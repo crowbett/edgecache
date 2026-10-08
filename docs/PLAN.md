@@ -522,5 +522,8 @@ came after the whole download (the herd A/B below: 539 ms vs the leader's 25 ms)
 - **Rejected**: reading the in-progress store file (needs a read-while-write port on `store.Writer` and a tier that
   can serve a partial body; disk can, memory cannot without the same buffer); a fixed ring buffer (the slowest
   waiter would throttle the leader and every other waiter).
-- **Measured** (`results/herd/20261007-191712/summary.md`, 4 MiB at 8 MiB/s, 32 GETs per cold key, 3 ABBA pairs):
-  waiter TTFB p50 539.2 -> 25.6 ms, waiter total p99 611.2 -> 528.5 ms, leader unchanged.
+- **Measured** (`results/herd/20261007-193209/summary.md`, 4 MiB at 8 MiB/s, 32 GETs per cold key, 3 ABBA pairs):
+  waiter TTFB p50 540.9 -> 26.4 ms, waiter total p99 596.5 -> 534.1 ms, leader within noise. A miss nobody joins
+  pays the body copy: `BenchmarkHandlerMiss` +16.7 KiB/op, 78 -> 83 allocs/op, ns/op inside the noise.
+- **Truncation**: an origin body failing after the status line now aborts the connection (leader, fallback and
+  waiters) instead of ending a chunked response cleanly.
