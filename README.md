@@ -68,8 +68,18 @@ Responses carry `X-Cache: HIT|MISS|STALE|REVALIDATED|BYPASS`, `Age`, `X-Cache-Re
 
 Concurrent misses for one key go through `internal/collapse`: the first caller leads on a context
 derived from the engine root (bounded by `COLLAPSE_LEAD_TIMEOUT`), never from its own request, so a
-client that disconnects cannot kill the fetch the others wait on; waiters re-`Get` after commit and
-count into `edgecache_collapsed_total`. On the tee loop a client write error does not abort the fetch:
+client that disconnects cannot kill the fetch the others wait on; waiters count into
+`edgecache_collapsed_total`.
+
+Waiters do not wait for the commit: once the leader has the origin's headers and the answer is storable, it
+publishes a stream (`collapse.DoEarly`) and every waiter serves the body as it downloads, from byte 0, at
+the leader's pace. A waiter only takes the stream when the committed entry would have served it (same
+Vary-selected key, `Evaluate` says fresh, its own conditional still answers 304), so nothing a waiter could
+not have read from the store is shared. The body is retained for late joiners up to
+`EDGECACHE_COLLAPSE_STREAM_BYTES`; past that the stream closes to new waiters (they wait for the commit, as
+before) and keeps only what an attached waiter has not yet sent. While a waiter is attached the leader reads
+the origin body to the end even if its own client left or the store refused the object. `0` turns
+streaming off. On the tee loop a client write error does not abort the fetch:
 the leader keeps filling the store up to `ORPHAN_MAX_BYTES`, then aborts, so a cancelled request still
 lands an entry. Proof from the smoke run: 20 concurrent cold `GET /obj/777` -> origin `{"total":1}`,
 `edgecache_collapsed_total 19`.
@@ -110,12 +120,13 @@ Every key is validated at startup and all problems are reported at once (`errors
 | `EDGECACHE_TRUSTED_PROXIES` | `""` (nobody) | comma-separated CIDRs / IPs whose `X-Forwarded-*` / `Forwarded` fields are honoured |
 | `EDGECACHE_RANGE_FILL` | `true` | a range miss starts one background full GET so the next range is a hit |
 | `EDGECACHE_JANITOR_INTERVAL` / `EDGECACHE_COLLAPSE_LEAD_TIMEOUT` | `30s` / `60s` | tombstone sweep + tag-index reconcile + gauge tick / leader budget |
+| `EDGECACHE_COLLAPSE_STREAM_BYTES` | `8MiB` | body retained so collapse waiters stream a miss while it downloads; `0` = waiters wait for the commit |
 | `REQUEST_TIMEOUT` / `SHUTDOWN_TIMEOUT` | `60s` / `15s` | admin mux only / proxy drain budget (teardown stage 2) |
 | `SERVICE_NAME` `APP_ENV` `LOG_LEVEL` `LOG_FORMAT` | `edgecache` `dev` `info` `json` | `LOG_LEVEL=debug` adds `X-Cache-Key` |
 | `OTEL_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` | `false` / `http://localhost:4317` | OTLP/gRPC traces + metrics, off by default |
 
 slow-origin (`cmd/slow-origin`): `ORIGIN_ADDR` `ORIGIN_LATENCY` `ORIGIN_JITTER` `ORIGIN_BODY_BYTES`
-`ORIGIN_CACHE_CONTROL` (`max-age=60`, `no-store`, or presets `etag` | `vary` | `swr`) `ORIGIN_KEYSPACE`;
+`ORIGIN_RATE` (body bytes/s, `0` = unpaced) `ORIGIN_CACHE_CONTROL` (`max-age=60`, `no-store`, or presets `etag` | `vary` | `swr`) `ORIGIN_KEYSPACE`;
 `GET /obj/{n}`, `GET|DELETE /admin/hits`.
 
 ## Metrics
@@ -149,7 +160,8 @@ edgecache_build_info{go_version="go1.27.0",version="8edb75d-dirty"} 1
 Machine: AMD Ryzen 7 3700X (8c/16t), Windows 11, Go 1.27.0, oha 1.16. slow-origin at 50 ms +/- 10 ms,
 16 KiB bodies, `Cache-Control: max-age=60`, keyspace 1000; edgecache with a 256 MiB memory tier, no disk;
 oha `-c 64 -z 30s` per mode. Hit ratio and origin rps come from `/metrics` deltas, never estimated.
-Commands: `task load` (`scripts/cache.ps1`), `task pgo` (`scripts/pgo.ps1`), `task bench` (`scripts/bench.ps1`).
+Commands: `task load` (`scripts/cache.ps1`), `task pgo` (`scripts/pgo.ps1`), `task bench` (`scripts/bench.ps1`),
+`pwsh -File scripts/herd.ps1` (collapse streaming A/B).
 
 ### Hit ratio and latency (`scripts/cache.ps1`)
 
@@ -175,6 +187,24 @@ round-to-round spread of 37 % / 57 % (rps) and 82 % / 83 % (p99), so no regressi
 hit benchmark `BenchmarkHandlerHit` (real handler + memstore + metrics, 8 ABAB rounds, benchstat) is 6.95 -> 7.01 us,
 p=0.38, **25 allocs/op both sides**; `HitPath` stays 368 B / 4 allocs, p=0.57. Trusted-proxy checks run only when
 `X-Forwarded-Proto` is present and `trustproxy.List.Trusts` is 0-alloc (pinned by a test).
+
+### Collapse streaming (`scripts/herd.ps1`, stream off/on, ABBA)
+
+`results/herd/20261007-191712/summary.md`: slow-origin serves a 4 MiB body paced at 8 MiB/s (~500 ms per
+download, 20 ms header latency); a fresh edgecache (memory tier only) per run; `cmd/herd` releases 32
+concurrent GETs per cold key, 10 keys per run, 3 ABBA pairs. Median of the per-run percentiles:
+
+| stream | role | ttfb p50 ms | ttfb p99 ms | total p50 ms | total p99 ms |
+|---|---|---:|---:|---:|---:|
+| off | leader | 24.3 | 39.7 | 522.2 | 529.3 |
+| off | waiter | 539.2 | 582.2 | 567.8 | 611.2 |
+| on | leader | 25.2 | 30.5 | 521.7 | 525.8 |
+| on | waiter | 25.6 | 36.9 | 522.2 | 528.5 |
+
+With streaming off a waiter's first byte arrives after the whole download plus the commit (539 ms); with it
+on, at the same time as the leader's (25.6 ms, -95 %), and its total drops to the leader's (p99 611 -> 528 ms)
+because the copy out of the store no longer follows the download. All 960 requests per mode returned the
+full 4 MiB body; every run's rows are in the summary. The leader is unaffected.
 
 ### PGO (`scripts/pgo.ps1`, warm mode, A/B/A/B interleaved)
 
@@ -253,7 +283,6 @@ still get the value; `internal/diskstore` tests orphan sweep, corrupt meta and e
 ## Follow-ups
 
 - Path-prefix purge that matches on the canonical path rather than the absolute URL prefix.
-- Stream-sharing for collapse waiters (Varnish-style) if the cold p99 says the wait for commit dominates.
 - Store 206 responses and combine them (RFC 9111 §3.4); today a range miss passes through and a
   background full GET fills the entry instead, which fetches the object twice on the first miss.
 - A `HEAD` miss is forwarded uncached (only a stored GET answers HEAD); fetching the GET on a HEAD miss

@@ -148,6 +148,8 @@ func (c *Cache) Drain(ctx context.Context) error // waits for in-flight backgrou
 type Group[T any] struct{ /* mu + map[string]*call[T] */ }
 func New[T any](root context.Context, lead time.Duration) *Group[T]
 func (g *Group[T]) Do(ctx context.Context, key string, fn func(context.Context) (T, error)) (T, bool, int, error) // val, shared, waiters
+// DoEarly (collapse streaming): fn may publish one interim value; waiters return it at once with early=true.
+func (g *Group[T]) DoEarly(ctx context.Context, key string, fn func(ctx context.Context, publish func(T)) (T, error)) (v T, shared, early bool, waiters int, err error)
 func (g *Group[T]) TryStart(key string) (done func(), ok bool) // background revalidation dedupe
 func (g *Group[T]) InFlight() int
 
@@ -236,7 +238,9 @@ that fits; `Writer` fans out into a memory buffer *and* the disk writer, droppin
    store (always) -> write to client (until it errors; after that it keeps filling the store up to
    `ORPHAN_MAX_BYTES`, then `Abort`s). `Commit` publishes atomically and registers the `Variant` + `tagindex` entries.
    Waiters wake after commit and re-`Get` (v1 waits, see Alternatives); a waiter whose context died drops out. Not
-   storable -> no writer, plain copy, `bypass`.
+   storable -> no writer, plain copy, `bypass`. Since collapse streaming (2026-10-07) a storable answer is also
+   teed into a `cache.stream` the leader publishes through `collapse.DoEarly`; waiters serve from it while the body
+   downloads and fall back to the commit when it does not fit them (see "Collapse streaming" below).
 6. **Purge**: `PURGE <path>` on the proxy listener (`X-Purge-Token`, constant-time compare, off unless the token is
    configured) or `POST /admin/purge {"url"|"prefix"|"tag"}` on the admin listener. URL -> primary key -> delete every
    variant; prefix/tag -> `tagindex` -> batch delete. `{"purged":N}` + `edgecache_purges_total{kind}`.
@@ -262,6 +266,7 @@ that fits; `Writer` fans out into a memory buffer *and* the disk writer, droppin
 | `EDGECACHE_TRUSTED_PROXIES` | `""` (nobody) | CIDRs/IPs whose `X-Forwarded-*` / `Forwarded` are honoured (Q7) |
 | `EDGECACHE_RANGE_FILL` | `true` | background full GET on a range miss (Q7) |
 | `EDGECACHE_JANITOR_INTERVAL` / `_COLLAPSE_LEAD_TIMEOUT` | `30s` / `60s` | tombstone+gauge tick / leader budget |
+| `EDGECACHE_COLLAPSE_STREAM_BYTES` | `8MiB` | body retained for collapse waiters joining a downloading miss; `0` = wait for commit |
 | `REQUEST_TIMEOUT` / `SHUTDOWN_TIMEOUT` | `60s` / `15s` | admin mux only / stage-2 drain |
 | `LOG_LEVEL` `LOG_FORMAT` `OTEL_ENABLED` `OTEL_EXPORTER_OTLP_ENDPOINT` | template | unchanged |
 | slow-origin: `ORIGIN_ADDR` `ORIGIN_LATENCY` `ORIGIN_JITTER` `ORIGIN_BODY_BYTES` `ORIGIN_CACHE_CONTROL` `ORIGIN_KEYSPACE` | `:8082` `50ms` `10ms` `16384` `max-age=60` `1000` | benchmark origin |
@@ -276,6 +281,7 @@ file), `HEURISTIC_FRACTION` in (0,1]. No globals; `Config` is passed by value.
 | proxy accept loop | `main` (`proxySrv.ListenAndServe`) | stage 2 graceful stop | err -> `errCh` -> `run` returns |
 | admin accept loop | `main` | stage 3 graceful stop (5 s) | err -> `errCh` |
 | per-request tee copy | handler goroutine, none extra | body EOF / `ORPHAN_MAX_BYTES` | client write err -> keep filling store, then `Abort` |
+| stream waiter copy | each waiter's handler goroutine, none extra | stream end / waiter ctx | short body, as the leader's client sees it |
 | collapse leader | first misser, inline on the **detached** ctx | commit/abort or `COLLAPSE_LEAD_TIMEOUT` | error delivered to every waiter, no entry written |
 | background revalidate | `cache` via `collapse.TryStart` | root ctx cancel; `Cache.Drain` waits (WaitGroup) | logs, keeps the stale entry, `outcome="error"` |
 | janitor (tombstones + gauges) | `cache.Run` ticker | root ctx cancel | retries next tick |
@@ -401,6 +407,7 @@ editing in place.
 3. Persist the tag index, or accept that surrogate purges only cover entries whose metas were scanned at boot? Assumed
    rebuild from metas during recovery, no separate file.
 4. Schedule stream-sharing (alternative 3) as a P16 follow-up now, or only if the cold-cache p99 says so?
+   **Resolved 2026-10-07**: built (see "Collapse streaming" at the end), default on, `0` keeps v1.
 
 ## Hardening (2026-09-19)
 
@@ -487,3 +494,33 @@ config, cache, origin, server). No frozen port type (`store.Meta`, `store.Writer
   `TRUSTED_PROXIES` (engine and PURGE alike); origin requests keep and extend `X-Forwarded-For` and keep
   `-Proto`/`-Host`/`Forwarded` only from trusted peers, otherwise they are dropped and rebuilt from the connection.
   `List.Trusts` is 0-alloc and only runs when the header is present.
+
+## Collapse streaming (2026-10-07)
+
+Open question 4, built. A waiter used to wait for the leader's commit, so on a cold large object its first byte
+came after the whole download (the herd A/B below: 539 ms vs the leader's 25 ms).
+
+- **Contract**: `collapse.DoEarly` lets the leader publish one interim value; waiters already blocked or joining
+  later return it at once (`early`). `Do` is `DoEarly` without a publish, so every existing caller is unchanged.
+  `cache.Config.CollapseStreamBytes` / `EDGECACHE_COLLAPSE_STREAM_BYTES` (default 8 MiB, `0` = v1) is the one new
+  frozen-type field (`config.Config` and `cache.Config`, integrator change).
+- **What is shared**: only an answer `Storable` accepted and the store opened a writer for, i.e. exactly what a
+  waiter would have read after the commit. `stream.meta` is the meta being stored (`StorableHeader`, not the raw
+  origin header the leader's own client gets). A waiter takes the stream only if the Vary-selected key matches and
+  `Evaluate` says `Fresh`; otherwise it waits for `stream.settle` and runs the v1 path (store `Get`, then a direct
+  fetch). Its own `If-None-Match` / `If-Modified-Since` still answers 304.
+- **Memory**: the body is retained from byte 0 while the stream is open to new readers, up to the budget; past it
+  the stream closes to new readers and trims every chunk all attached readers have sent, so after closing it holds
+  the gap between the leader and its slowest attached waiter. A stream nobody can read retains nothing. Chunks are
+  immutable after `append`, so readers write them without copying; the leader copies each read once.
+- **Leader loop**: `tee` appends every chunk; when its client is gone and the writer is aborted or past
+  `ORPHAN_MAX_BYTES`, it stops only if `stream.abandon()` says no reader is attached (check-and-close under one lock,
+  so no reader can attach in between). A waiter streaming therefore keeps the origin read going like a client would.
+- **Failure**: an origin read error ends the stream with that error; waiters stop where the leader's client stops.
+  A panic in the leader ends the stream (`errStreamAbandoned`) and settles it, so no waiter hangs. Range fills also
+  publish, so a GET miss that joins a fill streams it.
+- **Rejected**: reading the in-progress store file (needs a read-while-write port on `store.Writer` and a tier that
+  can serve a partial body; disk can, memory cannot without the same buffer); a fixed ring buffer (the slowest
+  waiter would throttle the leader and every other waiter).
+- **Measured** (`results/herd/20261007-191712/summary.md`, 4 MiB at 8 MiB/s, 32 GETs per cold key, 3 ABBA pairs):
+  waiter TTFB p50 539.2 -> 25.6 ms, waiter total p99 611.2 -> 528.5 ms, leader unchanged.
