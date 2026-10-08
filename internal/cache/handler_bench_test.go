@@ -84,3 +84,43 @@ func BenchmarkHandlerHit(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkHandlerMiss is a cold storable 16 KiB miss with no waiters (a new
+// URL every iteration), with collapse streaming off and on: the "on" case
+// pays for teeing the body into a stream nobody reads.
+func BenchmarkHandlerMiss(b *testing.B) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		stream int64
+	}{{"stream=off", 0}, {"stream=on", 8 << 20}} {
+		b.Run(tc.name, func(b *testing.B) {
+			st, err := memstore.New(memstore.Config{Capacity: 64 << 20, Shards: 16, MaxObjectBytes: 1 << 20, MaxVariants: 8})
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer func() { _ = st.Close() }()
+			c, err := cache.New(cache.Config{MaxVariants: 8, CollapseStreamBytes: tc.stream, Now: func() time.Time { return now }},
+				st, benchOrigin{body: bytes.Repeat([]byte("edgecache-bench-"), 1024)}, metrics.NewRegistry(nil), slog.New(slog.DiscardHandler))
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer c.Stop()
+			h := c.Handler()
+			w := &nopWriter{h: make(http.Header, 16)}
+			b.ReportAllocs()
+			b.SetBytes(16 << 10)
+			i := 0
+			for b.Loop() {
+				r := httptest.NewRequest(http.MethodGet, "/obj/"+strconv.Itoa(i), http.NoBody)
+				r.Host = "127.0.0.1:8081"
+				i++
+				clear(w.h)
+				h.ServeHTTP(w, r)
+			}
+			if w.h.Get("X-Cache") != "MISS" {
+				b.Fatalf("X-Cache = %q", w.h.Get("X-Cache"))
+			}
+		})
+	}
+}

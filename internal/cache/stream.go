@@ -37,8 +37,8 @@ type stream struct {
 	closed  bool  // no new readers: over max, abandoned or ended
 	ended   bool  // body complete (err == nil) or failed
 	err     error
-	readers map[*streamReader]struct{}
-	wake    chan struct{} // closed and replaced on every append / end
+	readers map[*streamReader]struct{} // allocated by the first attach
+	wake    chan struct{}              // closed and replaced on append / end while a reader is attached
 
 	settled chan struct{} // closed by settle once the leader's fetch result is final
 	final   fetchResult
@@ -49,7 +49,6 @@ func newStream(meta store.Meta, length, maxBytes int64) *stream {
 		meta:    meta,
 		length:  length,
 		max:     maxBytes,
-		readers: make(map[*streamReader]struct{}),
 		wake:    make(chan struct{}),
 		settled: make(chan struct{}),
 	}
@@ -70,6 +69,9 @@ func (s *stream) attach() (*streamReader, bool) {
 		return nil, false
 	}
 	r := &streamReader{s: s}
+	if s.readers == nil {
+		s.readers = make(map[*streamReader]struct{})
+	}
 	s.readers[r] = struct{}{}
 	return r, true
 }
@@ -213,7 +215,12 @@ func (s *stream) trimLocked() {
 	s.first = low
 }
 
+// wakeLocked releases readers blocked in next. Only an attached reader can be
+// blocked on s.wake, so with none there is nothing to close.
 func (s *stream) wakeLocked() {
+	if len(s.readers) == 0 {
+		return
+	}
 	close(s.wake)
 	s.wake = make(chan struct{})
 }

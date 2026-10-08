@@ -117,7 +117,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("encode report: %w", err)
 		}
-		if err := os.WriteFile(o.jsonOut, b, 0o644); err != nil {
+		if err := os.WriteFile(o.jsonOut, b, 0o600); err != nil {
 			return fmt.Errorf("write report: %w", err)
 		}
 	}
