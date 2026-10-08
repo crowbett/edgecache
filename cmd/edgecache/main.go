@@ -127,6 +127,7 @@ func run() error {
 		TagHeaders:          cfg.TagHeaders,
 		JanitorInterval:     cfg.JanitorInterval,
 		CollapseLeadTimeout: cfg.CollapseLeadTimeout,
+		CollapseStreamBytes: cfg.CollapseStreamBytes,
 		PurgeVerbose:        cfg.PurgeVerbose,
 		TrustedProxies:      trusted,
 		RangeFill:           cfg.RangeFill,
@@ -337,6 +338,7 @@ func configSummary(cfg config.Config) map[string]any {
 		"tag_headers":           cfg.TagHeaders,
 		"janitor_interval":      cfg.JanitorInterval.String(),
 		"collapse_lead_timeout": cfg.CollapseLeadTimeout.String(),
+		"collapse_stream_bytes": cfg.CollapseStreamBytes,
 		"range_fill":            cfg.RangeFill,
 	}
 }

@@ -46,6 +46,7 @@ const (
 	DefaultTagHeaders          = "Cache-Tag,Surrogate-Key"
 	DefaultJanitorInterval     = 30 * time.Second
 	DefaultCollapseLeadTimeout = 60 * time.Second
+	DefaultCollapseStreamBytes = 8 * MiB
 	DefaultRequestTimeout      = 60 * time.Second
 	DefaultShutdownTimeout     = 15 * time.Second
 )
@@ -102,6 +103,10 @@ type Config struct {
 
 	JanitorInterval     time.Duration // EDGECACHE_JANITOR_INTERVAL: tombstone sweep + gauge refresh tick
 	CollapseLeadTimeout time.Duration // EDGECACHE_COLLAPSE_LEAD_TIMEOUT: collapse leader budget
+	// CollapseStreamBytes is how much of a collapsed miss is retained so waiters
+	// can serve it while the leader downloads (EDGECACHE_COLLAPSE_STREAM_BYTES);
+	// 0 makes every waiter wait for the commit.
+	CollapseStreamBytes int64
 
 	// TrustedProxies are the peers whose X-Forwarded-Proto/-For/-Host and
 	// Forwarded headers are honoured (EDGECACHE_TRUSTED_PROXIES, comma-separated
@@ -144,6 +149,7 @@ func Load() (Config, error) {
 		TagHeaders:          headerList(getenv("EDGECACHE_TAG_HEADERS", DefaultTagHeaders)),
 		JanitorInterval:     DefaultJanitorInterval,
 		CollapseLeadTimeout: DefaultCollapseLeadTimeout,
+		CollapseStreamBytes: DefaultCollapseStreamBytes,
 	}
 
 	var errs []error
@@ -179,6 +185,7 @@ func Load() (Config, error) {
 		{"EDGECACHE_MAX_OBJECT_BYTES", &cfg.MaxObjectBytes},
 		{"EDGECACHE_MEM_MAX_OBJECT_BYTES", &cfg.MemMaxObjectBytes},
 		{"EDGECACHE_ORPHAN_MAX_BYTES", &cfg.OrphanMaxBytes},
+		{"EDGECACHE_COLLAPSE_STREAM_BYTES", &cfg.CollapseStreamBytes},
 	} {
 		var err error
 		if *b.dst, err = getBytes(b.key, *b.dst); err != nil {
@@ -342,6 +349,9 @@ func (c Config) Validate() error {
 	}
 	if c.OrphanMaxBytes < 0 {
 		errs = append(errs, fmt.Errorf("EDGECACHE_ORPHAN_MAX_BYTES must be >= 0, got %d", c.OrphanMaxBytes))
+	}
+	if c.CollapseStreamBytes < 0 {
+		errs = append(errs, fmt.Errorf("EDGECACHE_COLLAPSE_STREAM_BYTES must be >= 0, got %d", c.CollapseStreamBytes))
 	}
 
 	if len(c.TagHeaders) == 0 {

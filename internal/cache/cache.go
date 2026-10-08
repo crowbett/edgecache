@@ -112,6 +112,11 @@ type Config struct {
 	TagHeaders          []string // canonical header names read as surrogate keys
 	JanitorInterval     time.Duration
 	CollapseLeadTimeout time.Duration
+	// CollapseStreamBytes lets collapse waiters serve a storable miss while
+	// the leader downloads it: the body is retained for joiners up to this
+	// many bytes, then the stream closes to new ones (they wait for the
+	// commit). 0 disables streaming: every waiter waits for the commit.
+	CollapseStreamBytes int64
 	PurgeVerbose        bool
 	// TrustedProxies are the peers whose X-Forwarded-Proto is honoured when
 	// the request URL (and so the cache key) is rebuilt; zero value: nobody.

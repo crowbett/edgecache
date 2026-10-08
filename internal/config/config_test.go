@@ -54,6 +54,7 @@ func TestLoadDefaults(t *testing.T) {
 		{"TagHeaders", strings.Join(cfg.TagHeaders, ","), "Cache-Tag,Surrogate-Key"},
 		{"JanitorInterval", cfg.JanitorInterval, 30 * time.Second},
 		{"CollapseLeadTimeout", cfg.CollapseLeadTimeout, 60 * time.Second},
+		{"CollapseStreamBytes", cfg.CollapseStreamBytes, 8 * MiB},
 		{"RequestTimeout", cfg.RequestTimeout, 60 * time.Second},
 		{"ShutdownTimeout", cfg.ShutdownTimeout, 15 * time.Second},
 		{"LogFormat", cfg.LogFormat, "json"},

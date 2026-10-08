@@ -193,18 +193,21 @@ func (rq *request) serveStored(e *store.Entry, key cachekey.Key) {
 }
 
 // miss fetches through the collapse group: one leader per key runs the origin
-// exchange on the detached root context and streams to its own client; the
-// waiters re-read the committed entry. st (may be nil) is a stale entry the
-// fetch can validate or fall back to; miss releases it.
+// exchange on the detached root context and streams to its own client. The
+// waiters serve the leader's body as it downloads when the leader publishes a
+// stream (a storable answer, CollapseStreamBytes > 0); otherwise, or when the
+// stream does not fit this caller, they re-read the committed entry. st (may
+// be nil) is a stale entry the fetch can validate or fall back to; miss
+// releases it.
 func (rq *request) miss(st *stale) {
 	c := rq.c
 	if st != nil {
 		defer st.e.Release()
 	}
 	led := false
-	res, _, waiters, err := c.group.Do(rq.r.Context(), rq.collapseKey(st), func(ctx context.Context) (fetchResult, error) {
+	res, _, early, waiters, err := c.group.DoEarly(rq.r.Context(), rq.collapseKey(st), func(ctx context.Context, publish func(fetchResult)) (fetchResult, error) {
 		led = true
-		return c.fetchInto(ctx, rq, st), nil
+		return c.fetchInto(ctx, rq, st, publish), nil
 	})
 	if led {
 		rq.waiters = waiters
@@ -214,6 +217,12 @@ func (rq *request) miss(st *stale) {
 		return
 	}
 	rq.collapsed = true
+	if err == nil && early {
+		if rq.serveStream(res) {
+			return
+		}
+		res, err = res.stream.wait(rq.r.Context())
+	}
 	if err != nil {
 		// This caller stopped waiting (its client left or the leader budget
 		// ran out); nothing was written to it.
@@ -237,7 +246,64 @@ func (rq *request) miss(st *stale) {
 	// not storable, or failed): fetch directly, still on a detached context.
 	ctx, cancel := c.leadCtx()
 	defer cancel()
-	c.fetchInto(ctx, rq, st)
+	c.fetchInto(ctx, rq, st, nil)
+}
+
+// serveStream serves a collapse leader's body while it downloads. It applies
+// the checks the committed entry would get (the Vary-selected key must match,
+// Evaluate must say Fresh) and reports false, having written nothing, when the
+// stream does not fit this caller, is closed to new readers, or fails before
+// its first byte; the caller then falls back to the committed entry.
+func (rq *request) serveStream(res fetchResult) bool {
+	c, s := rq.c, res.stream
+	if keyFor(rq.k0, res.vary, rq.r.Header) != res.key {
+		return false
+	}
+	meta := s.meta
+	d := c.cfg.Policy.Evaluate(c.now(), meta.Resp, rfc9111.ParseResponse(meta.Header), rq.rd)
+	if d.Action != rfc9111.Fresh {
+		return false
+	}
+	rd, ok := s.attach()
+	if !ok {
+		return false
+	}
+	defer rd.close()
+	ctx := rq.r.Context()
+	p, err := rd.next(ctx)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	rq.key, rq.hasKey, rq.reason = res.key, true, d.Reason
+	outcome := OutcomeHit
+	if d.Reason == rfc9111.ReasonMaxStale {
+		outcome = OutcomeStale
+	}
+	h := rq.entryHeader(meta, outcome, d.Age)
+	w := rq.w
+	if notModified(rq.r, meta) {
+		h.Del("Content-Length")
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+	if s.length >= 0 && bodyAllowed(meta.Status) {
+		h.Set("Content-Length", strconv.FormatInt(s.length, 10))
+	} else {
+		h.Del("Content-Length")
+	}
+	w.WriteHeader(meta.Status)
+	for ; err == nil; p, err = rd.next(ctx) {
+		if _, werr := w.Write(p); werr != nil {
+			c.log.Debug("cache: stream client write", slog.Any("err", werr))
+			return true
+		}
+	}
+	if !errors.Is(err, io.EOF) {
+		// The leader's origin read failed or this client left mid-body: the
+		// response is short, as the leader's own client sees it.
+		c.log.Debug("cache: stream ended early", slog.String("path", rq.r.URL.Path), slog.Int64("bytes", w.bytes), slog.Any("err", err))
+	}
+	return true
 }
 
 // serveFresh serves a held entry when Evaluate allows it without an origin
@@ -316,7 +382,7 @@ func (c *Cache) startBackground(rq *request, key cachekey.Key, meta store.Meta) 
 		defer done()
 		ctx, cancel := c.leadCtx()
 		defer cancel()
-		res := c.fetchInto(ctx, bgrq, &stale{key: key, meta: meta, cond: rfc9111.HasValidator(meta.Header)})
+		res := c.fetchInto(ctx, bgrq, &stale{key: key, meta: meta, cond: rfc9111.HasValidator(meta.Header)}, nil)
 		if res.err != nil {
 			c.log.Warn("cache: background revalidation failed", slog.String("key", key.String()), slog.Any("err", res.err))
 			return
@@ -343,22 +409,7 @@ func (c *Cache) backgroundRequest(rq *request) *request {
 // answers 304; a GET with Range on a stored 200 is answered by serveRange.
 func (rq *request) serveEntry(meta store.Meta, e *store.Entry, outcome string, age time.Duration) {
 	c, w, r := rq.c, rq.w, rq.r
-	rq.outcome, rq.age = outcome, age
-	h := w.Header()
-	for k, vv := range meta.Header {
-		if k == "Age" {
-			continue
-		}
-		h[k] = vv
-	}
-	h.Set("Age", strconv.FormatInt(int64(age/time.Second), 10))
-	h.Set(HeaderXCache, strings.ToUpper(outcome))
-	if outcome == OutcomeStale && rq.reason != rfc9111.ReasonNone {
-		h.Set(HeaderXCacheReason, string(rq.reason))
-	}
-	if c.cfg.Debug && rq.hasKey {
-		h.Set(HeaderXCacheKey, rq.key.String())
-	}
+	h := rq.entryHeader(meta, outcome, age)
 	if notModified(r, meta) {
 		h.Del("Content-Length")
 		w.WriteHeader(http.StatusNotModified)
@@ -387,6 +438,29 @@ func (rq *request) serveEntry(meta store.Meta, e *store.Entry, outcome string, a
 	if _, err := io.CopyBuffer(struct{ io.Writer }{w}, rc, *buf); err != nil {
 		c.log.Debug("cache: client write", slog.Any("err", err))
 	}
+}
+
+// entryHeader copies a stored response's headers to the client with Age,
+// X-Cache, X-Cache-Reason (stale) and X-Cache-Key (debug) and records the
+// outcome; the status line is the caller's.
+func (rq *request) entryHeader(meta store.Meta, outcome string, age time.Duration) http.Header {
+	rq.outcome, rq.age = outcome, age
+	h := rq.w.Header()
+	for k, vv := range meta.Header {
+		if k == "Age" {
+			continue
+		}
+		h[k] = vv
+	}
+	h.Set("Age", strconv.FormatInt(int64(age/time.Second), 10))
+	h.Set(HeaderXCache, strings.ToUpper(outcome))
+	if outcome == OutcomeStale && rq.reason != rfc9111.ReasonNone {
+		h.Set(HeaderXCacheReason, string(rq.reason))
+	}
+	if rq.c.cfg.Debug && rq.hasKey {
+		h.Set(HeaderXCacheKey, rq.key.String())
+	}
+	return h
 }
 
 // upstream is what forward saw of the origin's answer: status (0 on a

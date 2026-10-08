@@ -195,8 +195,9 @@ func (c *Cache) startFill(rq *request) {
 	go func() {
 		defer c.bg.Done()
 		defer done()
-		res, _, _, err := c.group.Do(c.root, key, func(ctx context.Context) (fetchResult, error) {
-			return c.fetchInto(ctx, bgrq, nil), nil
+		// Miss waiters may join this fill: they stream its body like any leader's.
+		res, _, _, _, err := c.group.DoEarly(c.root, key, func(ctx context.Context, publish func(fetchResult)) (fetchResult, error) {
+			return c.fetchInto(ctx, bgrq, nil, publish), nil
 		})
 		if err == nil {
 			err = res.err

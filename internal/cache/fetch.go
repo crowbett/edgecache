@@ -18,13 +18,16 @@ const ReasonStoreError rfc9111.Reason = "store-error"
 
 // fetchResult is what a collapse leader publishes to its waiters: whether an
 // entry was committed (or refreshed) and under which key and Vary, the origin
-// status, and the transport error if the exchange failed.
+// status, and the transport error if the exchange failed. The early result a
+// leader publishes while the body is still downloading carries the stream
+// instead (stored false, key and vary set).
 type fetchResult struct {
 	stored bool
 	key    cachekey.Key
 	vary   []string
 	status int
 	err    error
+	stream *stream
 }
 
 // fetchInto runs one origin exchange for rq on ctx (a detached context) and,
@@ -32,7 +35,18 @@ type fetchResult struct {
 // the body into the store. st is a stale entry to validate (st.cond) or fall
 // back to on failure; it may be nil. Background refreshes call it with no
 // client and a stale without an entry.
-func (c *Cache) fetchInto(ctx context.Context, rq *request, st *stale) fetchResult {
+//
+// publish is the collapse group's early-result hook (nil outside a leader):
+// when the answer is storable and CollapseStreamBytes allows, the body is
+// teed into a stream too and published so the waiters serve it while it
+// downloads.
+func (c *Cache) fetchInto(ctx context.Context, rq *request, st *stale, publish func(fetchResult)) (res fetchResult) {
+	var sh *stream
+	defer func() {
+		// Also on panic: a waiter blocked on the stream must not hang.
+		sh.end(errStreamAbandoned) // no-op after a normal end
+		sh.settle(res)
+	}()
 	r := rq.r
 	up := r.Clone(ctx)
 	up.Body, up.ContentLength = http.NoBody, 0
@@ -52,7 +66,7 @@ func (c *Cache) fetchInto(ctx context.Context, rq *request, st *stale) fetchResu
 	c.rec.Origin(resp.StatusCode, t1.Sub(t0), nil)
 	defer resp.Body.Close()
 
-	res := rfc9111.Resp{
+	ores := rfc9111.Resp{
 		Status:       resp.StatusCode,
 		Header:       rfc9111.StripHopByHop(resp.Header),
 		RequestTime:  t0,
@@ -60,11 +74,11 @@ func (c *Cache) fetchInto(ctx context.Context, rq *request, st *stale) fetchResu
 	}
 	if resp.StatusCode == http.StatusNotModified {
 		if st != nil && st.cond {
-			return c.revalidated(ctx, rq, st, res)
+			return c.revalidated(ctx, rq, st, ores)
 		}
 		// The client's own conditional was forwarded: pass the 304 on.
 		if rq.w != nil {
-			rq.writeUpstream(res, OutcomeMiss, rfc9111.ReasonConditional)
+			rq.writeUpstream(ores, OutcomeMiss, rfc9111.ReasonConditional)
 		}
 		return fetchResult{status: resp.StatusCode}
 	}
@@ -78,12 +92,12 @@ func (c *Cache) fetchInto(ctx context.Context, rq *request, st *stale) fetchResu
 		}
 	}
 
-	sd := rfc9111.ParseResponse(res.Header)
-	storable, reason := c.cfg.Policy.Storable(r, rq.rd, res, sd)
+	sd := rfc9111.ParseResponse(ores.Header)
+	storable, reason := c.cfg.Policy.Storable(r, rq.rd, ores, sd)
 	var vary []string
 	if storable {
 		var verr error
-		if vary, verr = cachekey.NormalizeVary(res.Header.Values("Vary")); verr != nil {
+		if vary, verr = cachekey.NormalizeVary(ores.Header.Values("Vary")); verr != nil {
 			storable, reason = false, rfc9111.ReasonVaryStar
 		}
 	}
@@ -97,7 +111,7 @@ func (c *Cache) fetchInto(ctx context.Context, rq *request, st *stale) fetchResu
 		key  cachekey.Key
 	)
 	if storable {
-		meta, key = c.metaFor(rq, res, sd, vary)
+		meta, key = c.metaFor(rq, ores, sd, vary)
 		if resp.ContentLength > 0 {
 			meta.Size = resp.ContentLength
 		}
@@ -123,9 +137,9 @@ func (c *Cache) fetchInto(ctx context.Context, rq *request, st *stale) fetchResu
 	if rq.w != nil {
 		if storable {
 			rq.key, rq.hasKey = key, true
-			rq.writeUpstream(res, OutcomeMiss, rfc9111.ReasonNone)
+			rq.writeUpstream(ores, OutcomeMiss, rfc9111.ReasonNone)
 		} else {
-			rq.writeUpstream(res, OutcomeBypass, reason)
+			rq.writeUpstream(ores, OutcomeBypass, reason)
 		}
 	}
 
@@ -133,7 +147,17 @@ func (c *Cache) fetchInto(ctx context.Context, rq *request, st *stale) fetchResu
 	if !bodyAllowed(resp.StatusCode) || r.Method == http.MethodHead {
 		body = strings.NewReader("")
 	}
-	total, wr, rerr := c.tee(body, rq, wr)
+	if storable && publish != nil && c.cfg.CollapseStreamBytes > 0 && r.Method == http.MethodGet {
+		// Only a storable answer is shared: it is what the waiters would have
+		// read from the store after the commit, so nothing private leaks.
+		length := resp.ContentLength
+		if !bodyAllowed(resp.StatusCode) {
+			length = 0
+		}
+		sh = newStream(meta, length, c.cfg.CollapseStreamBytes)
+		publish(fetchResult{key: key, vary: vary, status: resp.StatusCode, stream: sh})
+	}
+	total, wr, rerr := c.tee(body, rq, wr, sh)
 	if rerr != nil {
 		c.log.Warn("cache: origin body", slog.String("path", r.URL.Path), slog.Int64("bytes", total), slog.Any("err", rerr))
 		return fetchResult{status: resp.StatusCode, err: rerr}
@@ -236,9 +260,11 @@ func (rq *request) writeUpstream(res rfc9111.Resp, label string, reason rfc9111.
 // tee is the miss copy loop: every chunk goes to the store writer (while one
 // is open) and to the client (until it errors or its context ends). After the
 // client is gone the store keeps filling up to OrphanMaxBytes (OrphanFetch),
-// then the writer is aborted. It returns the bytes read, the writer still open
+// then the writer is aborted. Every chunk also goes to sh (may be nil); while a
+// waiter is reading sh the body is read to the end whatever happened to the
+// leader's client and writer. It returns the bytes read, the writer still open
 // (nil once aborted) and the origin read error, if any.
-func (c *Cache) tee(body io.Reader, rq *request, wr store.Writer) (int64, store.Writer, error) {
+func (c *Cache) tee(body io.Reader, rq *request, wr store.Writer, sh *stream) (int64, store.Writer, error) {
 	buf := c.getBuf()
 	defer c.putBuf(buf)
 	var (
@@ -255,6 +281,7 @@ func (c *Cache) tee(body io.Reader, rq *request, wr store.Writer) (int64, store.
 		if n > 0 {
 			chunk := (*buf)[:n]
 			total += int64(n)
+			sh.append(chunk)
 			if wr != nil {
 				if c.cfg.MaxObjectBytes > 0 && total > c.cfg.MaxObjectBytes {
 					_ = wr.Abort()
@@ -273,24 +300,26 @@ func (c *Cache) tee(body io.Reader, rq *request, wr store.Writer) (int64, store.
 				}
 			}
 			if clientDead {
-				if wr == nil {
-					return total, nil, nil
-				}
 				// The orphan budget is for a client that left. A background
 				// refresh or range fill never had one; MaxObjectBytes bounds it.
-				if rq.w != nil && (!c.cfg.OrphanFetch || (c.cfg.OrphanMaxBytes > 0 && total > c.cfg.OrphanMaxBytes)) {
+				if wr != nil && rq.w != nil && (!c.cfg.OrphanFetch || (c.cfg.OrphanMaxBytes > 0 && total > c.cfg.OrphanMaxBytes)) {
 					_ = wr.Abort()
+					wr = nil
+				}
+				if wr == nil && sh.abandon() {
 					return total, nil, nil
 				}
 			}
 		}
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {
+				sh.end(nil)
 				return total, wr, nil
 			}
 			if wr != nil {
 				_ = wr.Abort()
 			}
+			sh.end(rerr)
 			return total, nil, rerr
 		}
 	}
