@@ -39,3 +39,4 @@ results/**
 
 # Terraform provider cache (terraform init)
 .terraform/
+.claude/*.local.md
