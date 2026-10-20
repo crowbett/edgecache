@@ -1,5 +1,7 @@
 # edgecache
 
+[![ci](https://github.com/crowbett/edgecache/actions/workflows/ci.yml/badge.svg)](https://github.com/crowbett/edgecache/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/crowbett/edgecache.svg)](https://pkg.go.dev/github.com/crowbett/edgecache) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 An RFC 9111 HTTP caching reverse proxy in Go, standard library only: freshness and validation,
 `stale-while-revalidate` / `stale-if-error`, `Vary`, singleflight collapse with a detached leader,
 memory + disk tiers, a purge API and hand-written Prometheus text. It sits in front of one origin
@@ -298,3 +300,7 @@ still get the value; `internal/diskstore` tests orphan sweep, corrupt meta and e
   background full GET fills the entry instead, which fetches the object twice on the first miss.
 - A `HEAD` miss is forwarded uncached (only a stored GET answers HEAD); fetching the GET on a HEAD miss
   would warm the entry for the next GET.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
