@@ -415,6 +415,23 @@ function Get-CacheStats {
 
 # ---- results -------------------------------------------------------------------------------
 
+# Get-DisplayPath returns the form of $Path that is safe to write into a committed result file:
+# repo-relative with forward slashes when it is under the repo root, otherwise just the leaf
+# name, so no machine-specific absolute path (home dir, temp dir) ever lands in results/.
+# Works on Windows PowerShell 5.1 (no [IO.Path]::GetRelativePath there).
+function Get-DisplayPath {
+    param([string]$Path)
+    if (-not $Path) { return $Path }
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetFullPath($script:RepoRoot).TrimEnd('\', '/')
+    if ($full.Length -gt $root.Length -and
+        $full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) -and
+        ($full[$root.Length] -eq '\' -or $full[$root.Length] -eq '/')) {
+        return ($full.Substring($root.Length + 1) -replace '\\', '/')
+    }
+    return [System.IO.Path]::GetFileName($full.TrimEnd('\', '/'))
+}
+
 # New-ResultDir creates results/<yyyyMMdd-HHmmss>/ (or results/<Experiment>/<ts>/) and returns it.
 function New-ResultDir {
     param([string]$Experiment = '')

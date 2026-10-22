@@ -125,7 +125,7 @@ if ($DiskDir) {
         Remove-Item -Recurse -Force $DiskDir
     }
     New-Item -ItemType Directory -Path $DiskDir -Force | Out-Null
-    $diskNote = "``$DiskDir``"
+    $diskNote = "``$(Get-DisplayPath $DiskDir)``"
     if ($Fresh) { $diskNote += ' (wiped)' } else { $diskNote += ' (recovered: a cold row is only cold if the dir was empty)' }
 }
 
@@ -250,8 +250,8 @@ $lines += ''
 $lines += (Get-MachineHeader)
 $lines += ''
 $lines += "- tag: $(if ($Tag) { $Tag } else { '(none)' })"
-$lines += "- edgecache: ``$Exe`` (mem $MemBytes, disk $diskNote, env: $(Format-EnvLine $Env))"
-$lines += "- slow-origin: ``$OriginExe`` ($Latency +/- $Jitter, $BodyBytes B bodies, ``Cache-Control: $CacheControl``, keyspace $Keyspace)"
+$lines += "- edgecache: ``$(Get-DisplayPath $Exe)`` (mem $MemBytes, disk $diskNote, env: $(Format-EnvLine $Env))"
+$lines += "- slow-origin: ``$(Get-DisplayPath $OriginExe)`` ($Latency +/- $Jitter, $BodyBytes B bodies, ``Cache-Control: $CacheControl``, keyspace $Keyspace)"
 $lines += "- oha: -c $Connections -z $Duration per mode (warmup $Warmup, discarded, for warm/no-cache)"
 $lines += "- distribution: $distNote"
 $lines += '- hit ratio = (hit+stale+revalidated)/all from `edgecache_requests_total` deltas; origin rps from `edgecache_origin_requests_total` deltas (the origin row reports oha rps)'

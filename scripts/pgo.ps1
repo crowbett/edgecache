@@ -238,11 +238,11 @@ $lines += ''
 $lines += (Get-MachineHeader)
 $lines += ''
 $lines += "- profile: $Seconds s CPU under warm load ($distNote, c=$Connections) -> ``cmd/edgecache/default.pgo`` ($pgoSize bytes)"
-$lines += "- pgo binary: ``$pgoExe`` (-pgo=$pgoSetting, $((Get-Item $pgoExe).Length) bytes)"
-$lines += "- nopgo binary: ``$nopgoExe`` (-pgo=off, $((Get-Item $nopgoExe).Length) bytes)"
+$lines += "- pgo binary: ``$(Get-DisplayPath $pgoExe)`` (-pgo=$pgoSetting, $((Get-Item $pgoExe).Length) bytes)"
+$lines += "- nopgo binary: ``$(Get-DisplayPath $nopgoExe)`` (-pgo=off, $((Get-Item $nopgoExe).Length) bytes)"
 $lines += "- comparison: $Rounds round(s) of nopgo/pgo interleaved, cache.ps1 -Modes warm, oha -c $Connections -z $Duration (warmup $Warmup), values averaged"
 $diskNote = 'disabled'
-if ($DiskDir) { $diskNote = '`' + $DiskDir + '`' }
+if ($DiskDir) { $diskNote = '`' + (Get-DisplayPath $DiskDir) + '`' }
 $lines += "- edgecache: mem $MemBytes, disk $diskNote, env: $(Format-EnvLine $Env)"
 $lines += ''
 $lines += "| mode | rps nopgo | rps pgo | $deltaHdr | p50 nopgo ms | p50 pgo ms | p99 nopgo ms | p99 pgo ms | p99 $deltaHdr | hit nopgo | hit pgo |"
