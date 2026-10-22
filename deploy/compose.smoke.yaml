@@ -1,0 +1,44 @@
+# Container smoke test: slow-origin -> edgecache -> curl, all from the production
+# Dockerfile. Mirrors the Cloud Run shape (proxy on 0.0.0.0:8080, admin on
+# 0.0.0.0:9101 behind a purge token) so the same env is exercised locally.
+#
+#   docker compose -f deploy/compose.smoke.yaml up --build --abort-on-container-exit --exit-code-from smoke
+#   docker compose -f deploy/compose.smoke.yaml down
+name: edgecache-smoke
+
+services:
+  origin:
+    build:
+      context: ..
+      target: slow-origin
+    image: edgecache-slow-origin:smoke
+    environment:
+      ORIGIN_ADDR: 0.0.0.0:8082
+      ORIGIN_LATENCY: 50ms
+      ORIGIN_CACHE_CONTROL: max-age=60
+
+  edgecache:
+    build:
+      context: ..
+      target: edgecache
+      args:
+        VERSION: smoke
+    image: edgecache:smoke
+    depends_on: [origin]
+    read_only: true # Cloud Run's filesystem is in-memory; nothing should need to write
+    environment:
+      EDGECACHE_ORIGIN: http://origin:8082
+      EDGECACHE_ADDR: 0.0.0.0:8080
+      EDGECACHE_ADMIN_ADDR: 0.0.0.0:9101
+      EDGECACHE_PURGE_TOKEN: smoke-only-token
+      EDGECACHE_MEM_BYTES: 256MiB
+      APP_ENV: smoke
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  smoke:
+    image: curlimages/curl:8.11.1
+    depends_on: [edgecache]
+    entrypoint: ["/bin/sh", "/smoke.sh"]
+    volumes:
+      - ./smoke.sh:/smoke.sh:ro

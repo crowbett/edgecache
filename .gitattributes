@@ -1,3 +1,5 @@
 # Golden files and the PGO profile are compared byte for byte: never CRLF-convert them on checkout.
 *.golden -text
 *.pgo binary
+# Mounted into Linux containers (deploy/smoke.sh): keep LF on every checkout.
+*.sh text eol=lf

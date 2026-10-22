@@ -1,0 +1,26 @@
+# docker compose -f deploy/compose.smoke.yaml up --build --abort-on-container-exit --exit-code-from smoke
+# 2026-10-01 (local), Docker Desktop 29.8.0 / WSL2, Windows 11, image edgecache:smoke 31.9 MB, user nonroot:nonroot
+readyz: {"status":"ready"}
+healthz: {"status":"ok"}
+GET /obj/42 #1 X-Cache: MISS
+GET /obj/42 #2 X-Cache: HIT
+origin hits: {"total":1,"not_modified":0,"keys":{"42":1}}
+metrics:
+edgecache_requests_total{outcome="hit"} 1
+edgecache_requests_total{outcome="miss"} 1
+edgecache_requests_total{outcome="stale"} 0
+edgecache_requests_total{outcome="revalidated"} 0
+edgecache_requests_total{outcome="bypass"} 0
+edgecache_requests_total{outcome="error"} 0
+edgecache_origin_requests_total{status_class="1xx"} 0
+edgecache_origin_requests_total{status_class="2xx"} 1
+edgecache_origin_requests_total{status_class="3xx"} 0
+edgecache_origin_requests_total{status_class="4xx"} 0
+edgecache_origin_requests_total{status_class="5xx"} 0
+edgecache_origin_requests_total{status_class="error"} 0
+edgecache_origin_requests_total{status_class="other"} 0
+edgecache_build_info{go_version="go1.27.1",version="smoke"} 1
+purge: {"purged":1,"kind":"prefix"}
+GET /obj/42 #3 (after purge) X-Cache: MISS
+SMOKE OK
+# smoke exit code: 0
