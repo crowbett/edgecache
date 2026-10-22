@@ -3,8 +3,8 @@
 _2026-09-19 08:56 | AMD Ryzen 7 3700X 8-Core Processor | go1.27.0 windows/amd64 | Microsoft Windows NT 10.0.26200.0 | PowerShell 7.6.6_
 
 - profile: 30 s CPU under warm load (zipf via --urls-from-file (1000 keys), c=64) -> `cmd/edgecache/default.pgo` (230021 bytes)
-- pgo binary: `C:\Users\corbe\dev\go\edgecache\bin\edgecache-pgo.exe` (-pgo=default.pgo, 19478528 bytes)
-- nopgo binary: `C:\Users\corbe\dev\go\edgecache\bin\edgecache-nopgo.exe` (-pgo=off, 19290112 bytes)
+- pgo binary: `bin\edgecache-pgo.exe` (-pgo=default.pgo, 19478528 bytes)
+- nopgo binary: `bin\edgecache-nopgo.exe` (-pgo=off, 19290112 bytes)
 - comparison: 2 round(s) of nopgo/pgo interleaved, cache.ps1 -Modes warm, oha -c 64 -z 30s (warmup 3s), values averaged
 - edgecache: mem 256MiB, disk disabled, env: (none)
 

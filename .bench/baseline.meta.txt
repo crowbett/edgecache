@@ -7,4 +7,4 @@ go:        go1.27.0 windows/amd64
 shell:     PowerShell 7.6.6
 command:   CGO_ENABLED=0 go test -run ^$ -bench . -benchmem -count 6 -timeout 1h ./internal/bench/...
 count:     6
-results:   C:\Users\corbe\dev\go\edgecache\.bench\baseline.txt
+results:   .bench\baseline.txt
