@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (gitignored) and fill in. Nothing here is secret.
+project_id = "my-gcp-project"
+region     = "us-central1"
+origin_url = "https://origin.example.com"
+
+# min_instances         = 1
+# max_instances         = 4
+# concurrency           = 250
+# ingress               = "INGRESS_TRAFFIC_ALL"
+# allow_unauthenticated = true
+# alert_email           = "oncall@example.com"
