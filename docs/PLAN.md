@@ -2,17 +2,17 @@
 Status: Proposed | Date: 2026-09-19 | Module: `github.com/crowbett/edgecache` (Go 1.27)
 
 ## Context
-P10 in `~/dev/ROADMAP.md` Queue 2: RFC 9111 caching reverse proxy - freshness/validation, swr, Vary, singleflight
+P10 in `ROADMAP.md` Queue 2: RFC 9111 caching reverse proxy - freshness/validation, swr, Vary, singleflight
 collapse, memory + disk tiers, purge API, Prometheus; the numbers are hit-ratio and p99 with oha against a slow
 origin, before/after PGO. The repo does not exist yet: the integrator runs `new-project.ps1 -Template go-api -Name
 edgecache` and moves this file to `docs/PLAN.md`. The scaffold gives `cmd/api/main.go` (config -> logger -> otel ->
 `http.Server` -> `signal.NotifyContext`), `internal/config` (env only), `internal/http` (`NewRouter` ->
 `registerRoutes` + `wrap` = RequestID/Tracing/Logging/Timeout/Recover/TagRoute), `internal/otel`; Postgres/compose/
-redis get deleted. Style comes from two finished siblings. `~/dev/go/aigw`: `internal/proxy` streams the upstream body
+redis get deleted. Style comes from two finished siblings. `aigw`: `internal/proxy` streams the upstream body
 on the handler goroutine with no buffering; `internal/gateway` puts streaming routes on a second mux **outside**
 `http.TimeoutHandler` (its writer cannot flush, its deadline guillotines long responses); `internal/metrics` is
 hand-written Prometheus text with a golden test, no `client_golang`; `internal/config` validates at startup with
-joined errors; `cmd/aigw/main.go` tears down in numbered stages with independent budgets. `~/dev/go/perf-lab`:
+joined errors; `cmd/aigw/main.go` tears down in numbered stages with independent budgets. `perf-lab`:
 `scripts/_lib.ps1` as the shared contract plus `load.ps1`/`pgo.ps1`/`bench.ps1`, results under
 `results/<experiment>/<yyyyMMdd-HHmmss>/` with only `summary.md` committed, `.bench/baseline.txt` + benchstat,
 `default.pgo` committed beside the binary's package. Non-goals (v1): TLS termination, multi-origin routing (aigw's
