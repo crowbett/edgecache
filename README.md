@@ -293,6 +293,18 @@ green, plus for any perf change a fresh `scripts/cache.ps1` table in `results/<t
 clock; `internal/collapse` is tested with 100 goroutines where the first caller cancels and the other 99
 still get the value; `internal/diskstore` tests orphan sweep, corrupt meta and evict-while-reading.
 
+## Deploy
+
+- **Container smoke test (runs locally):** `docker compose -f deploy/compose.smoke.yaml up --build
+  --abort-on-container-exit --exit-code-from smoke` builds the production image and a slow-origin image,
+  then asserts MISS -> HIT with one origin fetch, the metrics and a purge
+  ([transcript](deploy/smoke-output.txt)).
+- **Google Cloud Run ([`deploy/gcp`](deploy/gcp/README.md)):** Terraform for a Cloud Run v2 service,
+  Artifact Registry, a runtime service account with no project roles, Workload Identity Federation for
+  GitHub Actions (no JSON keys) and Cloud Monitoring alerts, plus a manual-only
+  [`deploy-gcp`](.github/workflows/deploy-gcp.yml) workflow. Validated, **never applied**; the guide has
+  a cost estimate and the serverless-cache caveats.
+
 ## Follow-ups
 
 - Path-prefix purge that matches on the canonical path rather than the absolute URL prefix.
