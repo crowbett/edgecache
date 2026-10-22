@@ -7,7 +7,57 @@ An RFC 9111 HTTP caching reverse proxy in Go, standard library only: freshness a
 memory + disk tiers, a purge API and hand-written Prometheus text. It sits in front of one origin
 and turns a 50 ms upstream into sub-millisecond hits, with the numbers measured below.
 
+## Try it in 60 seconds
+
+You need Go 1.27. Run these from a POSIX shell (Git Bash, Linux, macOS). The first `go run` compiles for about 30 s.
+
+```bash
+# terminal 1: a slow test origin on 127.0.0.1:8082 (50 ms, Cache-Control: max-age=60)
+go run ./cmd/slow-origin
+
+# terminal 2: the cache on 127.0.0.1:8081, admin + metrics on 127.0.0.1:9101
+EDGECACHE_ORIGIN=http://127.0.0.1:8082 go run ./cmd/edgecache
+
+# terminal 3
+curl -s -D - -o /dev/null http://127.0.0.1:8081/obj/1 | grep X-Cache   # X-Cache: MISS
+curl -s -D - -o /dev/null http://127.0.0.1:8081/obj/1 | grep X-Cache   # X-Cache: HIT
+curl -s http://127.0.0.1:9101/metrics | grep 'edgecache_requests_total{outcome="hit"}'   # ... 1
+curl -s -X POST -d '{"url":"http://127.0.0.1:8081/obj/1"}' http://127.0.0.1:9101/admin/purge   # {"purged":1,"kind":"url"}
+```
+
+To run it in Docker instead, the [container smoke test](#deploy) builds the distroless image and asserts
+MISS, then HIT with exactly one origin fetch, then purge. [`task`](https://taskfile.dev) wraps the same
+steps (`task origin`, `task run`); `task build` puts static binaries in `bin/` (`CGO_ENABLED=0`, `-trimpath`).
+
 ## Architecture
+
+Package dependencies (solid: imports; dotted: satisfies a consumer-defined port or is handed in as an
+`http.Handler`, all wired in `cmd/edgecache/main.go`; `config`, `otel` and `http` middleware omitted):
+
+```mermaid
+flowchart LR
+    client([client]) --> proxy["proxy listener :8081<br/>internal/server"]
+    ops([operator]) --> admin["admin listener :9101 loopback<br/>internal/server + internal/http"]
+    proxy --> engine["internal/cache<br/>engine: Handler, Purge, janitor"]
+    admin -->|purge, stats| engine
+    metrics -. "/metrics handler" .-> admin
+    engine --> rfc9111["internal/rfc9111<br/>pure policy"]
+    engine --> cachekey["internal/cachekey"]
+    engine --> collapse["internal/collapse<br/>singleflight"]
+    engine --> tagindex["internal/tagindex"]
+    engine --> trustproxy["internal/trustproxy"]
+    engine --> store["internal/store<br/>port types"]
+    origin["internal/origin<br/>upstream client"] -. Fetcher .-> engine
+    tiered["internal/tiered"] -. Store .-> engine
+    metrics["internal/metrics<br/>Prometheus text"] -. Recorder .-> engine
+    memstore["internal/memstore<br/>sharded LRU"] -. Tier .-> tiered
+    diskstore["internal/diskstore<br/>files + scan recovery"] -. Tier .-> tiered
+    tiered --> store
+    memstore --> store
+    diskstore --> store
+    origin --> rfc9111
+    origin --> upstream([origin server])
+```
 
 Three layers with hard boundaries, two listeners:
 
@@ -34,6 +84,14 @@ loopback :9101 admin listener (full template stack incl. Timeout)
   refcounts, atomic publish. They never read an HTTP header.
 - `internal/cache` is the **engine** joining them; `internal/server` mounts it. Imports flow one way
   (`server -> cache -> {rfc9111, cachekey, store, origin, collapse, tagindex, metrics}`).
+
+## Design decisions & trade-offs
+
+- **The RFC is a pure function.** `Policy.Evaluate` in [`internal/rfc9111`](internal/rfc9111/rfc9111.go) takes headers and a `now time.Time` and returns a decision. It does no I/O, starts no goroutines and never reads the clock. Every RFC 9111 rule is a table test with a fixed clock, and the policy layer allocates nothing. *Trade-off:* the engine in `internal/cache` has to thread `now` and the stored metadata through every path, so it carries more plumbing.
+- **A hand-written collapse instead of `x/sync/singleflight`.** `singleflight.Do` takes no context, so if the leader's client disconnects, every waiter fails with it. In [`internal/collapse`](internal/collapse/collapse.go), the leader runs on a context derived from the engine root and bounded by `COLLAPSE_LEAD_TIMEOUT`. A test cancels the first of 100 callers and checks that the other 99 still get the value. *Trade-off:* sharing the leader's stream with waiters means retaining its body (up to `EDGECACHE_COLLAPSE_STREAM_BYTES`) while the download runs.
+- **Orphan fetch.** A miss streams to the client and the store writer in one loop. If the client goes away, the fetch keeps filling the entry up to `ORPHAN_MAX_BYTES` ([`internal/cache/fetch.go`](internal/cache/fetch.go)), so a cancelled request still produces a cache entry. *Trade-off:* origin bandwidth gets spent on a response nobody is waiting for, which is why there is a byte cap.
+- **A crash-safe disk tier without a database.** Each entry writes its body, then its meta, each one temp + fsync + rename, with the meta last ([`internal/diskstore`](internal/diskstore/diskstore.go)). Every partial state is therefore detectable, the index is rebuilt by a scan at startup, and a corrupt meta is deleted rather than failing startup. Windows cannot unlink an open file, so evicted entries that are still held go on a tombstone list. *Trade-off:* startup time grows with the entry count.
+- **Two listeners and no `httputil.ReverseProxy`.** The proxy is a catch-all, so admin routes on the same mux would shadow origin paths. Admin, metrics and pprof therefore live on a second listener that binds to loopback by default ([`internal/server`](internal/server/server.go)). The proxy handler is not wrapped in `http.TimeoutHandler`, because that handler cannot flush and its deadline would cut long responses; the origin context bounds the proxy instead. `ReverseProxy` was skipped because its `ModifyResponse` cannot own the body copy, and the tee, the revalidation and the 304 merge all live in that copy.
 
 ## RFC 9111 coverage
 
@@ -312,6 +370,19 @@ still get the value; `internal/diskstore` tests orphan sweep, corrupt meta and e
   background full GET fills the entry instead, which fetches the object twice on the first miss.
 - A `HEAD` miss is forwarded uncached (only a stored GET answers HEAD); fetching the GET on a HEAD miss
   would warm the entry for the next GET.
+
+## Limitations
+
+- One origin per process; no multi-origin routing, no TLS termination (put it behind a terminator and list
+  that in `EDGECACHE_TRUSTED_PROXIES`).
+- Single node: no clustered or shared cache, no cache-to-cache protocol.
+- 206 responses are never stored; POST responses are never stored.
+- Disk-tier startup scans every meta file; there is no persistent index.
+- The tag index is in memory and rebuilt from disk metas at boot.
+- All benchmark numbers come from one Windows desktop (Ryzen 7 3700X) with client, proxy and origin on the
+  same machine; several runs were taken on a loaded box and are labelled as such. Treat them as relative, not
+  as capacity planning numbers.
+- The load scripts (`scripts/*.ps1`) need PowerShell 7 and `oha`.
 
 ## License
 
