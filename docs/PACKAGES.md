@@ -5,6 +5,8 @@ Moved verbatim from CLAUDE.md. See [../CLAUDE.md](../CLAUDE.md) for the short in
 - `cmd/edgecache/main.go` - wiring only: config -> logger -> otel -> store -> origin -> cache -> two servers ->
   staged teardown. `cmd/edgecache/ports_test.go` pins which concrete types satisfy the consumer-defined ports.
 - `cmd/slow-origin/main.go` - benchmark origin (`ORIGIN_ADDR/_LATENCY/_JITTER/_BODY_BYTES/_CACHE_CONTROL/_KEYSPACE`).
+- `cmd/webdemo/` - in-browser demo bridge (js/wasm, built by crowbett.github.io): plays requests through the real
+  engine over a memstore against a scripted origin on a simulated clock. Logic in `handler.go`; `main.go` is wasm-only.
 - `internal/config/` - env -> `config.Config`, joined validation at startup (`Validate` probes the disk dir).
 - `internal/http/` - template middleware chain (`Chain`, `RequestID`, `Tracing`, `Logging`, `Recover`, `Timeout`,
   `TagRoute`, `Readiness`), unchanged. `internal/otel/` - OTel bootstrap.
