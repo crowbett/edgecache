@@ -2,10 +2,12 @@
 
 [![ci](https://github.com/crowbett/edgecache/actions/workflows/ci.yml/badge.svg)](https://github.com/crowbett/edgecache/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/crowbett/edgecache.svg)](https://pkg.go.dev/github.com/crowbett/edgecache) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-An RFC 9111 HTTP caching reverse proxy in Go, standard library only: freshness and validation,
+An RFC 9111 HTTP caching reverse proxy in Go: freshness and validation,
 `stale-while-revalidate` / `stale-if-error`, `Vary`, singleflight collapse with a detached leader,
 memory + disk tiers, a purge API and hand-written Prometheus text. It sits in front of one origin
-and turns a 50 ms upstream into sub-millisecond hits, with the numbers measured below.
+and turns a 50 ms upstream into sub-millisecond hits, with the numbers measured below. The caching
+packages use the standard library only; the one third-party dependency is OpenTelemetry (OTLP/gRPC
+traces and metrics), which is off by default.
 
 ## Try it in 60 seconds
 

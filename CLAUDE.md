@@ -1,6 +1,6 @@
 # edgecache
 
-RFC 9111 HTTP caching reverse proxy in Go: freshness/validation, stale-while-revalidate / stale-if-error, Vary, singleflight collapse with a detached leader, memory + disk tiers, purge API, hand-written Prometheus text. Standard library only (template OTel stack stays, off by default). Module `github.com/crowbett/edgecache`, Go 1.27. Global Go conventions from `~/.claude/CLAUDE.md` apply.
+RFC 9111 HTTP caching reverse proxy in Go: freshness/validation, stale-while-revalidate / stale-if-error, Vary, singleflight collapse with a detached leader, memory + disk tiers, purge API, hand-written Prometheus text. Caching packages are standard library only; OpenTelemetry (`internal/otel`, `internal/http`) is the one third-party dependency, off by default. Module `github.com/crowbett/edgecache`, Go 1.27. Global Go conventions from `~/.claude/CLAUDE.md` apply.
 
 ## Where things are
 - `docs/PLAN.md`: design record (port signatures, config table, data flow, teardown, frozen types); read before changing a contract.
