@@ -6,7 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crowbett/edgecache/internal/cachekey"
 	"github.com/crowbett/edgecache/internal/rfc9111"
@@ -247,7 +249,7 @@ func (rq *request) writeUpstream(res rfc9111.Resp, label string, reason rfc9111.
 		h[k] = vv
 	}
 	if label == OutcomeMiss {
-		h.Set("Age", "0")
+		h.Set("Age", strconv.FormatInt(int64(rfc9111.Age(res, rq.c.now())/time.Second), 10))
 	}
 	h.Set(HeaderXCache, strings.ToUpper(label))
 	if reason != rfc9111.ReasonNone {

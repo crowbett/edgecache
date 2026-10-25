@@ -412,6 +412,21 @@ const target = "http://example.com/obj/1"
 
 // ---- tests -----------------------------------------------------------------
 
+func TestMissForwardsOriginAge(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	h.o.set(static(http.StatusOK, map[string]string{"Cache-Control": "max-age=60", "Age": "50"}, "hello"))
+	w := h.do(http.MethodGet, target)
+	expect(t, w, 200, "MISS", "hello")
+	if w.Header().Get("Age") != "50" {
+		t.Errorf("miss Age = %q, want the origin's 50", w.Header().Get("Age"))
+	}
+	h.clk.Advance(5 * time.Second)
+	if w := h.do(http.MethodGet, target); w.Header().Get("Age") != "55" {
+		t.Errorf("hit Age = %q, want 55", w.Header().Get("Age"))
+	}
+}
+
 func TestMissThenHitWithAge(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, nil)
